@@ -1,11 +1,13 @@
 import os
 import re
+import threading
+import webbrowser
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QComboBox, QFrame, QGroupBox, QMessageBox,
     QCheckBox, QProgressBar, QListWidget, QInputDialog, QSizePolicy
 )
-from PySide6.QtCore import Qt, Slot, QSettings, QTimer
+from PySide6.QtCore import Qt, Slot, Signal, QSettings, QTimer
 from PySide6.QtGui import QPixmap
 
 from app.constants import (
@@ -22,6 +24,8 @@ from app.widgets import VideoPlayer
 
 
 class MainWindow(QMainWindow):
+    _oauth_dialog_requested = Signal(str, str)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("YouTube Downloader")
@@ -41,6 +45,10 @@ class MainWindow(QMainWindow):
         self._pre_fullscreen_geometry = None
         self._fullscreen_hidden_widgets = []
         self._active_threads = []
+        self._pending_download_params = None
+        self._download_retry_attempted = False
+        self._oauth_event = threading.Event()
+        self._oauth_dialog_requested.connect(self._display_oauth_dialog)
 
         menu_bar = self.menuBar()
         settings_menu = menu_bar.addMenu("Settings")
@@ -202,12 +210,22 @@ class MainWindow(QMainWindow):
 
         self.main_layout.addWidget(self.options_group)
 
+        download_row = QHBoxLayout()
         self.download_button = QPushButton("Download")
         self.download_button.setEnabled(False)
         self.download_button.setMinimumHeight(40)
         self.download_button.setStyleSheet("font-size: 14px; font-weight: bold;")
         self.download_button.clicked.connect(self.start_download_workflow)
-        self.main_layout.addWidget(self.download_button)
+        download_row.addWidget(self.download_button)
+
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setMinimumHeight(40)
+        self.cancel_button.setFixedWidth(90)
+        self.cancel_button.setVisible(False)
+        self.cancel_button.clicked.connect(self.cancel_current_operation)
+        download_row.addWidget(self.cancel_button)
+
+        self.main_layout.addLayout(download_row)
 
         self.transcripts_group = QGroupBox("Transcripts")
         transcripts_layout = QHBoxLayout(self.transcripts_group)
@@ -265,6 +283,11 @@ class MainWindow(QMainWindow):
             self.error_label.setText("Please enter a YouTube video URL.")
             return
 
+        previous_fetch = getattr(self, 'fetch_thread', None)
+        if previous_fetch is not None and previous_fetch.isRunning():
+            if hasattr(previous_fetch, 'cancel'):
+                previous_fetch.cancel()
+
         self.video_url = url
         self.status_label.setText("Fetching data...")
         self.error_label.clear()
@@ -281,7 +304,8 @@ class MainWindow(QMainWindow):
         self.url_entry.setEnabled(False)
         self.player.stop()
 
-        self.fetch_thread = FetchThread(url, use_oauth=self.use_oauth.isChecked())
+        self.fetch_thread = FetchThread(url, use_oauth=self.use_oauth.isChecked(),
+                                        oauth_verifier=self._oauth_verifier)
         self.fetch_thread.finished.connect(self.update_info)
         self.fetch_thread.error.connect(self.show_error)
         self.fetch_thread.client_switched.connect(self.show_client_switch)
@@ -290,12 +314,16 @@ class MainWindow(QMainWindow):
 
     @Slot(str, str)
     def show_client_switch(self, original_client, new_client):
+        if self.sender() is not getattr(self, 'fetch_thread', None):
+            return
         self.status_label.setText(
             f"Client switched from {original_client} to {new_client} to fetch video data."
         )
 
     @Slot(list, list, list, str, str)
     def update_info(self, streams_info, captions_info, streams_objects, status, thumbnail_url):
+        if self.sender() is not getattr(self, 'fetch_thread', None):
+            return
         self.streams_objects = streams_objects
         self.captions_data = captions_info or []
         self.url_entry.setEnabled(True)
@@ -616,6 +644,14 @@ class MainWindow(QMainWindow):
 
         self.error_label.clear()
         self.download_button.setEnabled(False)
+        self._show_cancel(True)
+
+        self._pending_download_params = {
+            'audio_only': self.audio_only_checkbox.isChecked(),
+            'video_itag': self.video_format_combo.currentData(),
+            'audio_only_itag': self.audio_quality_combo.currentData(),
+            'download_dir': download_dir,
+        }
 
         if self.audio_only_checkbox.isChecked():
             self.download_audio_only(download_dir)
@@ -677,6 +713,9 @@ class MainWindow(QMainWindow):
             return
 
         self.progress_bar.setVisible(False)
+        self._show_cancel(False)
+        self._download_retry_attempted = False
+        self._pending_download_params = None
         self.status_label.setText(f"Download completed: {file_path}")
         self.download_button.setEnabled(True)
         QMessageBox.information(self, "Download Complete", f"File saved to:\n{file_path}")
@@ -793,6 +832,9 @@ class MainWindow(QMainWindow):
     def mux_completed(self, output_path):
         self.cleanup_temp_files()
         self.progress_bar.setVisible(False)
+        self._show_cancel(False)
+        self._download_retry_attempted = False
+        self._pending_download_params = None
         self.status_label.setText(f"Download completed: {output_path}")
         self.download_button.setEnabled(True)
         QMessageBox.information(self, "Download Complete", f"File saved to:\n{output_path}")
@@ -800,6 +842,7 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def mux_error(self, error_message):
         self.progress_bar.setVisible(False)
+        self._show_cancel(False)
         self.error_label.setText(f"Muxing Error: {error_message}")
         self.status_label.setText("Muxing failed. Temporary files were kept.")
         self.download_button.setEnabled(True)
@@ -885,6 +928,8 @@ class MainWindow(QMainWindow):
             os.remove(original)
 
         self.progress_bar.setVisible(False)
+        self._show_cancel(False)
+        self._pending_download_params = None
         self.status_label.setText(f"Conversion completed: {converted_path}")
         self.download_button.setEnabled(True)
 
@@ -902,6 +947,13 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def conversion_error(self, error_message):
         self.progress_bar.setVisible(False)
+        self._show_cancel(False)
+        self._pending_download_params = None
+        if "cancelled" in error_message.lower():
+            self.error_label.clear()
+            self.status_label.setText("Conversion cancelled.")
+            self.download_button.setEnabled(True)
+            return
         self.error_label.setText(f"Conversion Error: {error_message}")
         self.status_label.setText("Conversion failed. Original file was kept.")
         self.download_button.setEnabled(True)
@@ -958,7 +1010,8 @@ class MainWindow(QMainWindow):
             caption_code=cap_code,
             out_filename=out_path,
             fmt=fmt,
-            use_oauth=self.use_oauth.isChecked()
+            use_oauth=self.use_oauth.isChecked(),
+            oauth_verifier=self._oauth_verifier
         )
         self.caption_thread.completed.connect(self.transcript_download_completed)
         self.caption_thread.error.connect(self.transcript_download_error)
@@ -983,15 +1036,97 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def download_error(self, error_message):
+        err_lower = error_message.lower()
+        if "cancelled" in err_lower:
+            self.progress_bar.setVisible(False)
+            self._show_cancel(False)
+            self.pending_audio_conversion = False
+            self.cleanup_temp_files()
+            self._download_retry_attempted = False
+            self._pending_download_params = None
+            self.error_label.clear()
+            self.status_label.setText("Download cancelled.")
+            self.download_button.setEnabled(True)
+            return
+
+        is_expired = (
+            "403" in error_message
+            or "forbidden" in err_lower
+            or "expired" in err_lower
+            or "signature" in err_lower
+        )
+        if is_expired and not self._download_retry_attempted and self._pending_download_params:
+            self._download_retry_attempted = True
+            self.cleanup_temp_files()
+            self.status_label.setText("Stream URLs expired. Refreshing and retrying...")
+            self._refetch_and_retry_download()
+            return
+
         self.progress_bar.setVisible(False)
+        self._show_cancel(False)
         self.pending_audio_conversion = False
         self.cleanup_temp_files()
+        self._download_retry_attempted = False
         self.error_label.setText(f"Error: {error_message}")
         self.status_label.setText("Download failed.")
         self.download_button.setEnabled(True)
         QMessageBox.critical(self, "Download Error", error_message)
 
+    def _refetch_and_retry_download(self):
+        url = self.video_url
+        if not url:
+            self.download_button.setEnabled(True)
+            return
+        self.fetch_thread = FetchThread(url, use_oauth=self.use_oauth.isChecked(),
+                                        oauth_verifier=self._oauth_verifier)
+        self.fetch_thread.finished.connect(self._on_refetch_finished)
+        self.fetch_thread.error.connect(self._on_refetch_error)
+        self.fetch_thread.start()
+        self._track_thread(self.fetch_thread)
+
+    @Slot(list, list, list, str, str)
+    def _on_refetch_finished(self, streams_info, captions_info, streams_objects, status, thumbnail_url):
+        if self.sender() is not getattr(self, 'fetch_thread', None):
+            return
+        self.streams_objects = streams_objects
+        self.video_streams = [
+            s for s in streams_objects
+            if s.includes_video_track and s.is_adaptive
+        ]
+        self.audio_streams = [
+            s for s in streams_objects
+            if s.type == "audio" and not s.is_progressive
+        ]
+        params = self._pending_download_params
+        if not params:
+            self.download_button.setEnabled(True)
+            return
+        if params['audio_only']:
+            itag = params['audio_only_itag']
+            idx = self.audio_quality_combo.findData(itag)
+            if idx >= 0:
+                self.audio_quality_combo.setCurrentIndex(idx)
+            self.download_audio_only(params['download_dir'])
+        else:
+            itag = params['video_itag']
+            idx = self.video_format_combo.findData(itag)
+            if idx >= 0:
+                self.video_format_combo.setCurrentIndex(idx)
+            self.download_video_with_audio(params['download_dir'])
+
+    @Slot(str)
+    def _on_refetch_error(self, error_message):
+        if self.sender() is not getattr(self, 'fetch_thread', None):
+            return
+        self.progress_bar.setVisible(False)
+        self._download_retry_attempted = False
+        self.error_label.setText(f"Error refreshing stream URLs: {error_message}")
+        self.status_label.setText("Retry failed.")
+        self.download_button.setEnabled(True)
+
     def show_error(self, error):
+        if self.sender() is not getattr(self, 'fetch_thread', None):
+            return
         self.error_label.setText(f"Error: {error}")
         self.status_label.setText("Failed to fetch data.")
         self.url_entry.setEnabled(True)
@@ -1000,10 +1135,51 @@ class MainWindow(QMainWindow):
         self._active_threads = [t for t in self._active_threads if t.isRunning()]
         self._active_threads.append(thread)
 
+    def _oauth_verifier(self, verification_url, user_code):
+        self._oauth_event.clear()
+        self._oauth_dialog_requested.emit(str(verification_url), str(user_code))
+        self._oauth_event.wait()
+
+    @Slot(str, str)
+    def _display_oauth_dialog(self, verification_url, user_code):
+        try:
+            webbrowser.open(verification_url)
+        except Exception:
+            pass
+        QMessageBox.information(
+            self,
+            "YouTube OAuth Authentication",
+            f"A browser window was opened for YouTube authentication.\n\n"
+            f"Enter this code when prompted:\n\n    {user_code}\n\n"
+            f"If the browser did not open, visit:\n{verification_url}\n\n"
+            f"Click OK after you have completed authentication in the browser."
+        )
+        self._oauth_event.set()
+
+    def _show_cancel(self, visible=True):
+        self.cancel_button.setVisible(visible)
+        self.cancel_button.setEnabled(visible)
+
+    def cancel_current_operation(self):
+        self.cancel_button.setEnabled(False)
+        self.status_label.setText("Cancelling...")
+        for attr in ('download_thread', 'mux_thread', 'conversion_thread',
+                     'caption_thread', 'fetch_thread'):
+            thread = getattr(self, attr, None)
+            if thread is not None and thread.isRunning():
+                if hasattr(thread, 'cancel'):
+                    thread.cancel()
+        self._pending_download_params = None
+        self._download_retry_attempted = False
+        self.pending_audio_conversion = False
+
     def closeEvent(self, event):
+        self._oauth_event.set()
         self.player.release()
         for t in self._active_threads:
             if t.isRunning():
+                if hasattr(t, 'cancel'):
+                    t.cancel()
                 t.quit()
                 t.wait(3000)
         super().closeEvent(event)
