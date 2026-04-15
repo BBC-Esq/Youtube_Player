@@ -1,3 +1,4 @@
+import os
 import av
 from PySide6.QtCore import QThread, Signal
 
@@ -13,6 +14,10 @@ class MuxThread(QThread):
         self.audio_path = audio_path
         self.output_path = output_path
         self.container_format = container_format
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def run(self):
         video_input = None
@@ -38,6 +43,8 @@ class MuxThread(QThread):
 
             last_percent = -1
             for packet in video_input.demux(video_in_stream):
+                if self._cancelled:
+                    raise RuntimeError("Muxing cancelled.")
                 if packet.dts is None:
                     continue
                 if total_seconds > 0 and packet.pts is not None:
@@ -57,6 +64,8 @@ class MuxThread(QThread):
                 audio_total_seconds = 0
 
             for packet in audio_input.demux(audio_in_stream):
+                if self._cancelled:
+                    raise RuntimeError("Muxing cancelled.")
                 if packet.dts is None:
                     continue
                 if audio_total_seconds > 0 and packet.pts is not None:
@@ -72,7 +81,10 @@ class MuxThread(QThread):
             success = True
         except Exception as e:
             success = False
-            self.error.emit(str(e))
+            if self._cancelled:
+                self.error.emit("Muxing cancelled.")
+            else:
+                self.error.emit(str(e))
         finally:
             for container in (output, audio_input, video_input):
                 if container is not None:
@@ -80,5 +92,10 @@ class MuxThread(QThread):
                         container.close()
                     except Exception:
                         pass
+            if not success and self._cancelled and self.output_path and os.path.exists(self.output_path):
+                try:
+                    os.remove(self.output_path)
+                except OSError:
+                    pass
         if success:
             self.completed.emit(self.output_path)

@@ -1,3 +1,4 @@
+import os
 import av
 from PySide6.QtCore import QThread, Signal
 
@@ -18,10 +19,15 @@ class ConversionThread(QThread):
         self.bitrate = bitrate
         self.sample_rate = sample_rate
         self.channels = channels
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def run(self):
         input_container = None
         output_container = None
+        success = False
         try:
             input_container = av.open(self.input_path)
             output_container = av.open(self.output_path, mode="w", format=self.container)
@@ -49,6 +55,8 @@ class ConversionThread(QThread):
 
             last_percent = -1
             for frame in input_container.decode(in_stream):
+                if self._cancelled:
+                    raise RuntimeError("Conversion cancelled.")
                 if total_seconds > 0 and frame.pts is not None:
                     current_seconds = float(frame.pts * time_base)
                     percent = min(int((current_seconds / total_seconds) * 100), 99)
@@ -65,9 +73,12 @@ class ConversionThread(QThread):
                 output_container.mux(packet)
 
             self.progress.emit(100)
-            self.completed.emit(self.output_path)
+            success = True
         except Exception as e:
-            self.error.emit(str(e))
+            if self._cancelled:
+                self.error.emit("Conversion cancelled.")
+            else:
+                self.error.emit(str(e))
         finally:
             for container in (output_container, input_container):
                 if container is not None:
@@ -75,3 +86,10 @@ class ConversionThread(QThread):
                         container.close()
                     except Exception:
                         pass
+            if not success and self._cancelled and self.output_path and os.path.exists(self.output_path):
+                try:
+                    os.remove(self.output_path)
+                except OSError:
+                    pass
+        if success:
+            self.completed.emit(self.output_path)

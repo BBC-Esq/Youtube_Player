@@ -18,6 +18,23 @@ class DownloadThread(QThread):
         self.timeout = timeout
         self.max_retries = max_retries
         self.interrupt_checker = interrupt_checker
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def _check_interrupt(self, *args, **kwargs):
+        if self.interrupt_checker is not None:
+            try:
+                if self.interrupt_checker(*args, **kwargs):
+                    return True
+            except TypeError:
+                try:
+                    if self.interrupt_checker():
+                        return True
+                except Exception:
+                    pass
+        return self._cancelled
 
     def _on_progress(self, stream, chunk, bytes_remaining):
         total = stream.filesize
@@ -36,14 +53,20 @@ class DownloadThread(QThread):
                 skip_existing=self.skip_existing,
                 timeout=self.timeout,
                 max_retries=self.max_retries,
-                interrupt_checker=self.interrupt_checker
+                interrupt_checker=self._check_interrupt
             )
+            if self._cancelled:
+                self.error.emit("Download cancelled.")
+                return
             if downloaded_file:
                 self.progress.emit(100)
                 self.completed.emit(downloaded_file)
             else:
                 self.error.emit("Download was skipped or failed.")
         except Exception as e:
-            self.error.emit(str(e))
+            if self._cancelled:
+                self.error.emit("Download cancelled.")
+            else:
+                self.error.emit(str(e))
         finally:
             self.stream._monostate.on_progress = original_callback
