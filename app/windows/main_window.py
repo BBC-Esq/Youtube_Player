@@ -5,22 +5,20 @@ import webbrowser
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QComboBox, QFrame, QGroupBox, QMessageBox,
-    QCheckBox, QProgressBar, QListWidget, QInputDialog, QSizePolicy
+    QCheckBox, QListWidget, QInputDialog
 )
 from PySide6.QtCore import Qt, Slot, Signal, QSettings, QTimer
 from PySide6.QtGui import QPixmap
 
 from app.constants import (
-    AUDIO_FORMATS, CODEC_SAMPLE_FORMATS, BITRATE_OPTIONS, SAMPLE_RATE_OPTIONS,
-    CHANNEL_OPTIONS, detect_mux_container,
-    VIDEO_CODEC_NAMES, VIDEO_CODEC_TOOLTIPS, AUDIO_CODEC_NAMES, AUDIO_CODEC_TOOLTIPS
+    AUDIO_FORMATS, BITRATE_OPTIONS, SAMPLE_RATE_OPTIONS,
+    CHANNEL_OPTIONS, VIDEO_CODEC_NAMES, VIDEO_CODEC_TOOLTIPS,
+    AUDIO_CODEC_NAMES, AUDIO_CODEC_TOOLTIPS
 )
-from app.threads import (
-    FetchThread, DownloadThread, CaptionDownloadThread, ConversionThread, MuxThread,
-    ThumbnailThread
-)
+from app.threads import FetchThread, CaptionDownloadThread, ThumbnailThread
 from app.dialogs import SettingsDialog
-from app.widgets import VideoPlayer
+from app.widgets import VideoPlayer, DownloadsPanel, Toast
+from app.core import DownloadManager, DownloadJob
 
 
 class MainWindow(QMainWindow):
@@ -29,7 +27,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("YouTube Downloader")
-        self.setGeometry(100, 100, 850, 700)
+        self.setGeometry(100, 100, 900, 780)
 
         self.settings = QSettings("YouTubeDownloader", "YouTubeDownloader")
         self.streams_objects = []
@@ -38,17 +36,18 @@ class MainWindow(QMainWindow):
         self.captions_data = []
         self.video_url = ""
         self.video_title = ""
-        self.pending_audio_conversion = False
-        self.last_downloaded_file = ""
-        self.temp_video_path = ""
-        self.temp_audio_path = ""
         self._pre_fullscreen_geometry = None
         self._fullscreen_hidden_widgets = []
         self._active_threads = []
-        self._pending_download_params = None
-        self._download_retry_attempted = False
         self._oauth_event = threading.Event()
+        self._oauth_lock = threading.Lock()
         self._oauth_dialog_requested.connect(self._display_oauth_dialog)
+
+        self.download_manager = DownloadManager(self, oauth_verifier=self._oauth_verifier)
+        self.download_manager.job_added.connect(self._on_job_added)
+        self.download_manager.job_updated.connect(self._on_job_updated)
+        self.download_manager.job_finished.connect(self._on_job_finished)
+        self.download_manager.job_failed.connect(self._on_job_failed)
 
         menu_bar = self.menuBar()
         settings_menu = menu_bar.addMenu("Settings")
@@ -211,20 +210,12 @@ class MainWindow(QMainWindow):
         self.main_layout.addWidget(self.options_group)
 
         download_row = QHBoxLayout()
-        self.download_button = QPushButton("Download")
+        self.download_button = QPushButton("Add to Queue")
         self.download_button.setEnabled(False)
         self.download_button.setMinimumHeight(40)
         self.download_button.setStyleSheet("font-size: 14px; font-weight: bold;")
-        self.download_button.clicked.connect(self.start_download_workflow)
+        self.download_button.clicked.connect(self.enqueue_download)
         download_row.addWidget(self.download_button)
-
-        self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.setMinimumHeight(40)
-        self.cancel_button.setFixedWidth(90)
-        self.cancel_button.setVisible(False)
-        self.cancel_button.clicked.connect(self.cancel_current_operation)
-        download_row.addWidget(self.cancel_button)
-
         self.main_layout.addLayout(download_row)
 
         self.transcripts_group = QGroupBox("Transcripts")
@@ -239,16 +230,15 @@ class MainWindow(QMainWindow):
         transcripts_layout.addWidget(self.transcript_download_button)
         self.main_layout.addWidget(self.transcripts_group)
 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("%p%")
-        self.progress_bar.setVisible(False)
-        self.main_layout.addWidget(self.progress_bar)
+        self.downloads_panel = DownloadsPanel()
+        self.downloads_panel.cancel_requested.connect(self.download_manager.cancel)
+        self.downloads_panel.remove_requested.connect(self._remove_job)
+        self.main_layout.addWidget(self.downloads_panel)
 
         self.status_label = QLabel("Paste a YouTube URL above to get started.")
         self.main_layout.addWidget(self.status_label)
+
+        self.toast = Toast(self)
 
         self.transcripts_list.itemSelectionChanged.connect(
             lambda: self.transcript_download_button.setEnabled(
@@ -365,6 +355,8 @@ class MainWindow(QMainWindow):
 
     @Slot(QPixmap)
     def _on_thumbnail_loaded(self, pixmap):
+        if self.sender() is not getattr(self, 'thumbnail_thread', None):
+            return
         self.player.set_thumbnail(pixmap)
 
     def preview_video(self, seek_ms=None):
@@ -637,328 +629,117 @@ class MainWindow(QMainWindow):
         )
         return candidates[0] if candidates else None
 
-    def start_download_workflow(self):
+    def _build_conversion_params(self):
+        mode = self.conversion_mode_combo.currentText()
+        if mode == "No Conversion":
+            return None
+        bitrate_str = self.conv_bitrate_combo.currentText().replace(" kbps", "")
+        bitrate = int(bitrate_str) * 1000
+        sample_rate = int(self.conv_sample_rate_combo.currentText().replace(" Hz", ""))
+        channel_name = self.conv_channels_combo.currentText()
+        channels = CHANNEL_OPTIONS.get(channel_name, 2)
+        return {
+            "mode": mode,
+            "format": self.conv_format_combo.currentText(),
+            "bitrate": bitrate,
+            "sample_rate": sample_rate,
+            "channels": channels,
+        }
+
+    def enqueue_download(self):
         download_dir = self.get_download_directory()
         if not download_dir:
             return
+        if not self.streams_objects:
+            self.error_label.setText("No streams available to download.")
+            return
 
         self.error_label.clear()
-        self.download_button.setEnabled(False)
-        self._show_cancel(True)
+        audio_only = self.audio_only_checkbox.isChecked()
 
-        self._pending_download_params = {
-            'audio_only': self.audio_only_checkbox.isChecked(),
-            'video_itag': self.video_format_combo.currentData(),
-            'audio_only_itag': self.audio_quality_combo.currentData(),
-            'download_dir': download_dir,
-        }
-
-        if self.audio_only_checkbox.isChecked():
-            self.download_audio_only(download_dir)
-        else:
-            self.download_video_with_audio(download_dir)
-
-    def download_audio_only(self, download_dir):
-        itag = self.audio_quality_combo.currentData()
-        if itag is None:
-            self.error_label.setText("No audio stream selected.")
-            self.download_button.setEnabled(True)
-            return
-
-        stream = self.find_stream_by_itag(itag)
-        if not stream:
-            self.error_label.setText("Could not find selected audio stream.")
-            self.download_button.setEnabled(True)
-            return
-
-        base_title = self.sanitize_filename(self.video_title or "audio")
-        bitrate = stream.abr or "unknown"
-        filename = f"{base_title}_Audio_{bitrate}.{stream.subtype}"
-        if len(filename) > 200:
-            ext = f".{stream.subtype}"
-            filename = f"{filename[:200 - len(ext)]}{ext}"
-
-        output_path = os.path.join(download_dir, filename)
-        if os.path.exists(output_path):
-            reply = QMessageBox.question(
-                self, "File Exists",
-                f"'{filename}' already exists.\nOverwrite it?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
-                self.download_button.setEnabled(True)
+        if audio_only:
+            audio_itag = self.audio_quality_combo.currentData()
+            if audio_itag is None:
+                self.error_label.setText("No audio stream selected.")
                 return
-
-        self.pending_audio_conversion = self.should_convert_audio()
-        self.status_label.setText(f"Downloading audio: {filename}")
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("Downloading: %p%")
-        self.progress_bar.setVisible(True)
-
-        self.download_thread = DownloadThread(
-            stream=stream, output_path=download_dir, filename=filename,
-            skip_existing=False
-        )
-        self.download_thread.progress.connect(self.update_progress)
-        self.download_thread.completed.connect(self.audio_download_completed)
-        self.download_thread.error.connect(self.download_error)
-        self.download_thread.start()
-        self._track_thread(self.download_thread)
-
-    @Slot(str)
-    def audio_download_completed(self, file_path):
-        if self.pending_audio_conversion:
-            self.pending_audio_conversion = False
-            self.start_audio_conversion(file_path)
-            return
-
-        self.progress_bar.setVisible(False)
-        self._show_cancel(False)
-        self._download_retry_attempted = False
-        self._pending_download_params = None
-        self.status_label.setText(f"Download completed: {file_path}")
-        self.download_button.setEnabled(True)
-        QMessageBox.information(self, "Download Complete", f"File saved to:\n{file_path}")
-
-    def download_video_with_audio(self, download_dir):
-        video_itag = self.video_format_combo.currentData()
-        if video_itag is None:
-            self.error_label.setText("No video stream selected.")
-            self.download_button.setEnabled(True)
-            return
-
-        video_stream = self.find_stream_by_itag(video_itag)
-        if not video_stream:
-            self.error_label.setText("Could not find selected video stream.")
-            self.download_button.setEnabled(True)
-            return
-
-        audio_stream = self.get_best_audio_for_video(video_stream)
-        if not audio_stream:
-            self.error_label.setText("No compatible audio stream found.")
-            self.download_button.setEnabled(True)
-            return
-
-        base_title = self.sanitize_filename(self.video_title or "video")
-        res = video_stream.resolution or "unknown"
-
-        video_filename = f"{base_title}_video_temp.{video_stream.subtype}"
-        audio_filename = f"{base_title}_audio_temp.{audio_stream.subtype}"
-
-        self.temp_video_path = os.path.join(download_dir, video_filename)
-        self.temp_audio_path = os.path.join(download_dir, audio_filename)
-
-        container_fmt, container_ext = detect_mux_container(
-            video_stream.video_codec, audio_stream.audio_codec
-        )
-
-        final_filename = f"{base_title}_{res}{container_ext}"
-        if len(final_filename) > 200:
-            final_filename = f"{final_filename[:200 - len(container_ext)]}{container_ext}"
-        self.final_output_path = os.path.join(download_dir, final_filename)
-        self.mux_container_format = container_fmt
-
-        if os.path.exists(self.final_output_path):
-            reply = QMessageBox.question(
-                self, "File Exists",
-                f"'{final_filename}' already exists.\nOverwrite it?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
-                self.download_button.setEnabled(True)
+            audio_stream = self.find_stream_by_itag(audio_itag)
+            if not audio_stream:
+                self.error_label.setText("Could not find selected audio stream.")
                 return
-
-        self.pending_audio_stream = audio_stream
-        self.status_label.setText(f"Downloading video: {res}...")
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("Downloading video: %p%")
-        self.progress_bar.setVisible(True)
-
-        self.download_thread = DownloadThread(
-            stream=video_stream,
-            output_path=download_dir,
-            filename=video_filename,
-            skip_existing=False
-        )
-        self.download_thread.progress.connect(self.update_progress)
-        self.download_thread.completed.connect(self.video_download_completed)
-        self.download_thread.error.connect(self.download_error)
-        self.download_thread.start()
-        self._track_thread(self.download_thread)
-
-    @Slot(str)
-    def video_download_completed(self, video_path):
-        self.temp_video_path = video_path
-        audio_stream = self.pending_audio_stream
-        download_dir = os.path.dirname(video_path)
-        audio_filename = os.path.basename(self.temp_audio_path)
-
-        self.status_label.setText("Downloading audio...")
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("Downloading audio: %p%")
-
-        self.download_thread = DownloadThread(
-            stream=audio_stream,
-            output_path=download_dir,
-            filename=audio_filename,
-            skip_existing=False
-        )
-        self.download_thread.progress.connect(self.update_progress)
-        self.download_thread.completed.connect(self.audio_for_mux_completed)
-        self.download_thread.error.connect(self.download_error)
-        self.download_thread.start()
-        self._track_thread(self.download_thread)
-
-    @Slot(str)
-    def audio_for_mux_completed(self, audio_path):
-        self.temp_audio_path = audio_path
-        self.status_label.setText("Muxing video and audio...")
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("Muxing: %p%")
-
-        self.mux_thread = MuxThread(
-            video_path=self.temp_video_path,
-            audio_path=self.temp_audio_path,
-            output_path=self.final_output_path,
-            container_format=self.mux_container_format
-        )
-        self.mux_thread.progress.connect(self.update_progress)
-        self.mux_thread.completed.connect(self.mux_completed)
-        self.mux_thread.error.connect(self.mux_error)
-        self.mux_thread.start()
-        self._track_thread(self.mux_thread)
-
-    @Slot(str)
-    def mux_completed(self, output_path):
-        self.cleanup_temp_files()
-        self.progress_bar.setVisible(False)
-        self._show_cancel(False)
-        self._download_retry_attempted = False
-        self._pending_download_params = None
-        self.status_label.setText(f"Download completed: {output_path}")
-        self.download_button.setEnabled(True)
-        QMessageBox.information(self, "Download Complete", f"File saved to:\n{output_path}")
-
-    @Slot(str)
-    def mux_error(self, error_message):
-        self.progress_bar.setVisible(False)
-        self._show_cancel(False)
-        self.error_label.setText(f"Muxing Error: {error_message}")
-        self.status_label.setText("Muxing failed. Temporary files were kept.")
-        self.download_button.setEnabled(True)
-        QMessageBox.critical(self, "Muxing Error",
-                             f"Failed to combine video and audio:\n{error_message}\n\n"
-                             f"Temporary files kept at:\n{self.temp_video_path}\n{self.temp_audio_path}")
-
-    def cleanup_temp_files(self):
-        for path in [self.temp_video_path, self.temp_audio_path]:
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
-
-    def _update_conversion_fields_state(self):
-        enabled = self.conversion_mode_combo.currentText() != "No Conversion"
-        self.conv_format_combo.setEnabled(enabled)
-        self.conv_bitrate_combo.setEnabled(enabled)
-        self.conv_sample_rate_combo.setEnabled(enabled)
-        self.conv_channels_combo.setEnabled(enabled)
-        if enabled:
-            self._update_bitrate_state()
-
-    def _update_bitrate_state(self):
-        if not self.conv_format_combo.isEnabled():
-            return
-        fmt = self.conv_format_combo.currentText()
-        is_lossy = AUDIO_FORMATS.get(fmt, {}).get("lossy", True)
-        self.conv_bitrate_combo.setEnabled(is_lossy)
-
-    def should_convert_audio(self):
-        return self.conversion_mode_combo.currentText() != "No Conversion"
-
-    def start_audio_conversion(self, input_path):
-        fmt_name = self.conv_format_combo.currentText()
-        fmt_config = AUDIO_FORMATS.get(fmt_name, AUDIO_FORMATS["MP3"])
-
-        bitrate_str = self.conv_bitrate_combo.currentText().replace(" kbps", "")
-        bitrate = int(bitrate_str) * 1000
-
-        sample_rate = int(self.conv_sample_rate_combo.currentText().replace(" Hz", ""))
-
-        channel_name = self.conv_channels_combo.currentText()
-        channels = CHANNEL_OPTIONS.get(channel_name, 2)
-
-        base, original_ext = os.path.splitext(input_path)
-        output_path = f"{base}.{fmt_config['extension']}"
-        if os.path.normpath(output_path) == os.path.normpath(input_path):
-            output_path = f"{base}_converted.{fmt_config['extension']}"
-
-        codec = fmt_config["codec"]
-        sample_format = CODEC_SAMPLE_FORMATS.get(codec, "fltp")
-
-        self.last_downloaded_file = input_path
-        self.status_label.setText(f"Converting to {fmt_name}...")
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("Converting: %p%")
-        self.progress_bar.setVisible(True)
-
-        self.conversion_thread = ConversionThread(
-            input_path=input_path,
-            output_path=output_path,
-            codec=codec,
-            container=fmt_config["container"],
-            sample_format=sample_format,
-            bitrate=bitrate if fmt_config["lossy"] else None,
-            sample_rate=sample_rate,
-            channels=channels
-        )
-        self.conversion_thread.progress.connect(self.update_progress)
-        self.conversion_thread.completed.connect(self.conversion_completed)
-        self.conversion_thread.error.connect(self.conversion_error)
-        self.conversion_thread.start()
-        self._track_thread(self.conversion_thread)
-
-    @Slot(str)
-    def conversion_completed(self, converted_path):
-        mode = self.conversion_mode_combo.currentText()
-        original = self.last_downloaded_file
-
-        if mode == "Convert and Delete Original" and os.path.exists(original):
-            os.remove(original)
-
-        self.progress_bar.setVisible(False)
-        self._show_cancel(False)
-        self._pending_download_params = None
-        self.status_label.setText(f"Conversion completed: {converted_path}")
-        self.download_button.setEnabled(True)
-
-        if mode == "Convert and Delete Original":
-            QMessageBox.information(
-                self, "Download & Conversion Complete",
-                f"Converted file saved to:\n{converted_path}\n\nOriginal file was deleted."
+            conversion_params = self._build_conversion_params()
+            job = DownloadJob(
+                url=self.video_url,
+                title=self.video_title or "audio",
+                output_dir=download_dir,
+                audio_only=True,
+                use_oauth=self.use_oauth.isChecked(),
+                audio_itag=audio_itag,
+                audio_stream=audio_stream,
+                convert_after=conversion_params is not None,
+                conversion_params=conversion_params,
             )
         else:
-            QMessageBox.information(
-                self, "Download & Conversion Complete",
-                f"Converted file saved to:\n{converted_path}\n\nOriginal file kept at:\n{original}"
+            video_itag = self.video_format_combo.currentData()
+            if video_itag is None:
+                self.error_label.setText("No video stream selected.")
+                return
+            video_stream = self.find_stream_by_itag(video_itag)
+            if not video_stream:
+                self.error_label.setText("Could not find selected video stream.")
+                return
+            audio_stream = self.get_best_audio_for_video(video_stream)
+            if not audio_stream:
+                self.error_label.setText("No compatible audio stream found.")
+                return
+            job = DownloadJob(
+                url=self.video_url,
+                title=self.video_title or "video",
+                output_dir=download_dir,
+                audio_only=False,
+                use_oauth=self.use_oauth.isChecked(),
+                video_itag=video_itag,
+                audio_itag=audio_stream.itag,
+                video_stream=video_stream,
+                audio_stream=audio_stream,
             )
 
+        self.download_manager.enqueue(job)
+        self.status_label.setText(f"Added to queue: {job.title}")
+        self.toast.show_message(f"Added to queue: {job.title}", level="info", duration_ms=2500)
+
     @Slot(str)
-    def conversion_error(self, error_message):
-        self.progress_bar.setVisible(False)
-        self._show_cancel(False)
-        self._pending_download_params = None
-        if "cancelled" in error_message.lower():
-            self.error_label.clear()
-            self.status_label.setText("Conversion cancelled.")
-            self.download_button.setEnabled(True)
-            return
-        self.error_label.setText(f"Conversion Error: {error_message}")
-        self.status_label.setText("Conversion failed. Original file was kept.")
-        self.download_button.setEnabled(True)
-        QMessageBox.critical(self, "Conversion Error",
-                             f"Audio conversion failed:\n{error_message}\n\nThe original downloaded file was kept.")
+    def _on_job_added(self, job_id):
+        job = self.download_manager.get_job(job_id)
+        if job:
+            self.downloads_panel.add_job(job)
+            self.downloads_panel.sync(self.download_manager.all_jobs())
+
+    @Slot(str)
+    def _on_job_updated(self, job_id):
+        job = self.download_manager.get_job(job_id)
+        if job is None:
+            self.downloads_panel.remove_job(job_id)
+        else:
+            self.downloads_panel.update_job(job)
+        self.downloads_panel.sync(self.download_manager.all_jobs())
+
+    @Slot(str, str)
+    def _on_job_finished(self, job_id, final_path):
+        name = os.path.basename(final_path) if final_path else ""
+        self.status_label.setText(f"Download completed: {final_path}")
+        self.toast.show_message(f"Download complete: {name}", level="success")
+        QTimer.singleShot(5000, lambda jid=job_id: self._remove_job(jid))
+
+    @Slot(str, str)
+    def _on_job_failed(self, job_id, error_message):
+        self.status_label.setText(f"Download failed: {error_message}")
+        short = error_message if len(error_message) <= 140 else error_message[:137] + "..."
+        self.toast.show_message(f"Download failed: {short}", level="error", duration_ms=6000)
+
+    def _remove_job(self, job_id):
+        self.download_manager.remove(job_id)
+        self.downloads_panel.remove_job(job_id)
+        self.downloads_panel.sync(self.download_manager.all_jobs())
 
     def download_transcript(self):
         download_dir = self.get_download_directory()
@@ -1022,7 +803,7 @@ class MainWindow(QMainWindow):
     def transcript_download_completed(self, file_path):
         self.status_label.setText(f"Transcript saved: {file_path}")
         self.transcript_download_button.setEnabled(True)
-        QMessageBox.information(self, "Transcript Downloaded", f"File saved to:\n{file_path}")
+        self.toast.show_message(f"Transcript saved: {os.path.basename(file_path)}", level="success")
 
     @Slot(str)
     def transcript_download_error(self, error_message):
@@ -1030,99 +811,21 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Transcript download failed.")
         self.transcript_download_button.setEnabled(True)
 
-    @Slot(int)
-    def update_progress(self, value):
-        self.progress_bar.setValue(value)
+    def _update_conversion_fields_state(self):
+        enabled = self.conversion_mode_combo.currentText() != "No Conversion"
+        self.conv_format_combo.setEnabled(enabled)
+        self.conv_bitrate_combo.setEnabled(enabled)
+        self.conv_sample_rate_combo.setEnabled(enabled)
+        self.conv_channels_combo.setEnabled(enabled)
+        if enabled:
+            self._update_bitrate_state()
 
-    @Slot(str)
-    def download_error(self, error_message):
-        err_lower = error_message.lower()
-        if "cancelled" in err_lower:
-            self.progress_bar.setVisible(False)
-            self._show_cancel(False)
-            self.pending_audio_conversion = False
-            self.cleanup_temp_files()
-            self._download_retry_attempted = False
-            self._pending_download_params = None
-            self.error_label.clear()
-            self.status_label.setText("Download cancelled.")
-            self.download_button.setEnabled(True)
+    def _update_bitrate_state(self):
+        if not self.conv_format_combo.isEnabled():
             return
-
-        is_expired = (
-            "403" in error_message
-            or "forbidden" in err_lower
-            or "expired" in err_lower
-            or "signature" in err_lower
-        )
-        if is_expired and not self._download_retry_attempted and self._pending_download_params:
-            self._download_retry_attempted = True
-            self.cleanup_temp_files()
-            self.status_label.setText("Stream URLs expired. Refreshing and retrying...")
-            self._refetch_and_retry_download()
-            return
-
-        self.progress_bar.setVisible(False)
-        self._show_cancel(False)
-        self.pending_audio_conversion = False
-        self.cleanup_temp_files()
-        self._download_retry_attempted = False
-        self.error_label.setText(f"Error: {error_message}")
-        self.status_label.setText("Download failed.")
-        self.download_button.setEnabled(True)
-        QMessageBox.critical(self, "Download Error", error_message)
-
-    def _refetch_and_retry_download(self):
-        url = self.video_url
-        if not url:
-            self.download_button.setEnabled(True)
-            return
-        self.fetch_thread = FetchThread(url, use_oauth=self.use_oauth.isChecked(),
-                                        oauth_verifier=self._oauth_verifier)
-        self.fetch_thread.finished.connect(self._on_refetch_finished)
-        self.fetch_thread.error.connect(self._on_refetch_error)
-        self.fetch_thread.start()
-        self._track_thread(self.fetch_thread)
-
-    @Slot(list, list, list, str, str)
-    def _on_refetch_finished(self, streams_info, captions_info, streams_objects, status, thumbnail_url):
-        if self.sender() is not getattr(self, 'fetch_thread', None):
-            return
-        self.streams_objects = streams_objects
-        self.video_streams = [
-            s for s in streams_objects
-            if s.includes_video_track and s.is_adaptive
-        ]
-        self.audio_streams = [
-            s for s in streams_objects
-            if s.type == "audio" and not s.is_progressive
-        ]
-        params = self._pending_download_params
-        if not params:
-            self.download_button.setEnabled(True)
-            return
-        if params['audio_only']:
-            itag = params['audio_only_itag']
-            idx = self.audio_quality_combo.findData(itag)
-            if idx >= 0:
-                self.audio_quality_combo.setCurrentIndex(idx)
-            self.download_audio_only(params['download_dir'])
-        else:
-            itag = params['video_itag']
-            idx = self.video_format_combo.findData(itag)
-            if idx >= 0:
-                self.video_format_combo.setCurrentIndex(idx)
-            self.download_video_with_audio(params['download_dir'])
-
-    @Slot(str)
-    def _on_refetch_error(self, error_message):
-        if self.sender() is not getattr(self, 'fetch_thread', None):
-            return
-        self.progress_bar.setVisible(False)
-        self._download_retry_attempted = False
-        self.error_label.setText(f"Error refreshing stream URLs: {error_message}")
-        self.status_label.setText("Retry failed.")
-        self.download_button.setEnabled(True)
+        fmt = self.conv_format_combo.currentText()
+        is_lossy = AUDIO_FORMATS.get(fmt, {}).get("lossy", True)
+        self.conv_bitrate_combo.setEnabled(is_lossy)
 
     def show_error(self, error):
         if self.sender() is not getattr(self, 'fetch_thread', None):
@@ -1132,13 +835,13 @@ class MainWindow(QMainWindow):
         self.url_entry.setEnabled(True)
 
     def _track_thread(self, thread):
-        self._active_threads = [t for t in self._active_threads if t.isRunning()]
         self._active_threads.append(thread)
 
     def _oauth_verifier(self, verification_url, user_code):
-        self._oauth_event.clear()
-        self._oauth_dialog_requested.emit(str(verification_url), str(user_code))
-        self._oauth_event.wait()
+        with self._oauth_lock:
+            self._oauth_event.clear()
+            self._oauth_dialog_requested.emit(str(verification_url), str(user_code))
+            self._oauth_event.wait()
 
     @Slot(str, str)
     def _display_oauth_dialog(self, verification_url, user_code):
@@ -1156,26 +859,16 @@ class MainWindow(QMainWindow):
         )
         self._oauth_event.set()
 
-    def _show_cancel(self, visible=True):
-        self.cancel_button.setVisible(visible)
-        self.cancel_button.setEnabled(visible)
-
-    def cancel_current_operation(self):
-        self.cancel_button.setEnabled(False)
-        self.status_label.setText("Cancelling...")
-        for attr in ('download_thread', 'mux_thread', 'conversion_thread',
-                     'caption_thread', 'fetch_thread'):
-            thread = getattr(self, attr, None)
-            if thread is not None and thread.isRunning():
-                if hasattr(thread, 'cancel'):
-                    thread.cancel()
-        self._pending_download_params = None
-        self._download_retry_attempted = False
-        self.pending_audio_conversion = False
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'toast'):
+            self.toast.reposition()
 
     def closeEvent(self, event):
         self._oauth_event.set()
         self.player.release()
+        self.download_manager.cancel_all()
+        self.download_manager.wait_for_all(3000)
         for t in self._active_threads:
             if t.isRunning():
                 if hasattr(t, 'cancel'):
