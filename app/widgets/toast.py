@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QLabel, QWidget
+from PySide6.QtWidgets import QLabel, QWidget, QGraphicsOpacityEffect
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
 
 
@@ -12,11 +12,15 @@ class Toast(QLabel):
         self.setMaximumWidth(520)
         self.hide()
 
+        self._opacity_effect = QGraphicsOpacityEffect(self)
+        self._opacity_effect.setOpacity(1.0)
+        self.setGraphicsEffect(self._opacity_effect)
+
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._start_fade_out)
 
-        self._fade = QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade = QPropertyAnimation(self._opacity_effect, b"opacity", self)
         self._fade.setDuration(300)
         self._fade.setEasingCurve(QEasingCurve.InOutQuad)
         self._fade.finished.connect(self._on_fade_finished)
@@ -47,7 +51,7 @@ class Toast(QLabel):
         self.setText(text)
         self.adjustSize()
         self._reposition()
-        self.setWindowOpacity(1.0)
+        self._opacity_effect.setOpacity(1.0)
         self.show()
         self.raise_()
         self._timer.start(duration_ms)
@@ -75,5 +79,5 @@ class Toast(QLabel):
     def _on_fade_finished(self):
         if self._fading_out:
             self.hide()
-            self.setWindowOpacity(1.0)
+            self._opacity_effect.setOpacity(1.0)
             self._fading_out = False

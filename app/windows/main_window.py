@@ -12,7 +12,8 @@ from PySide6.QtGui import QPixmap
 
 from app.constants import (
     AUDIO_FORMATS, BITRATE_OPTIONS, SAMPLE_RATE_OPTIONS,
-    CHANNEL_OPTIONS, VIDEO_CODEC_NAMES, VIDEO_CODEC_TOOLTIPS,
+    CHANNEL_OPTIONS, detect_mux_container,
+    VIDEO_CODEC_NAMES, VIDEO_CODEC_TOOLTIPS,
     AUDIO_CODEC_NAMES, AUDIO_CODEC_TOOLTIPS
 )
 from app.threads import FetchThread, CaptionDownloadThread, ThumbnailThread
@@ -656,6 +657,7 @@ class MainWindow(QMainWindow):
 
         self.error_label.clear()
         audio_only = self.audio_only_checkbox.isChecked()
+        base_title = self.sanitize_filename(self.video_title or ("audio" if audio_only else "video"))
 
         if audio_only:
             audio_itag = self.audio_quality_combo.currentData()
@@ -666,6 +668,23 @@ class MainWindow(QMainWindow):
             if not audio_stream:
                 self.error_label.setText("Could not find selected audio stream.")
                 return
+
+            bitrate = audio_stream.abr or "unknown"
+            filename = f"{base_title}_Audio_{bitrate}.{audio_stream.subtype}"
+            if len(filename) > 200:
+                ext = f".{audio_stream.subtype}"
+                filename = f"{filename[:200 - len(ext)]}{ext}"
+            final_path = os.path.join(download_dir, filename)
+
+            if os.path.exists(final_path):
+                reply = QMessageBox.question(
+                    self, "File Exists",
+                    f"'{filename}' already exists.\nOverwrite it?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                )
+                if reply != QMessageBox.Yes:
+                    return
+
             conversion_params = self._build_conversion_params()
             job = DownloadJob(
                 url=self.video_url,
@@ -675,6 +694,8 @@ class MainWindow(QMainWindow):
                 use_oauth=self.use_oauth.isChecked(),
                 audio_itag=audio_itag,
                 audio_stream=audio_stream,
+                final_filename=filename,
+                final_output_path=final_path,
                 convert_after=conversion_params is not None,
                 conversion_params=conversion_params,
             )
@@ -691,6 +712,25 @@ class MainWindow(QMainWindow):
             if not audio_stream:
                 self.error_label.setText("No compatible audio stream found.")
                 return
+
+            res = video_stream.resolution or "unknown"
+            container_fmt, container_ext = detect_mux_container(
+                video_stream.video_codec, audio_stream.audio_codec
+            )
+            final_filename = f"{base_title}_{res}{container_ext}"
+            if len(final_filename) > 200:
+                final_filename = f"{final_filename[:200 - len(container_ext)]}{container_ext}"
+            final_path = os.path.join(download_dir, final_filename)
+
+            if os.path.exists(final_path):
+                reply = QMessageBox.question(
+                    self, "File Exists",
+                    f"'{final_filename}' already exists.\nOverwrite it?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                )
+                if reply != QMessageBox.Yes:
+                    return
+
             job = DownloadJob(
                 url=self.video_url,
                 title=self.video_title or "video",
@@ -701,6 +741,9 @@ class MainWindow(QMainWindow):
                 audio_itag=audio_stream.itag,
                 video_stream=video_stream,
                 audio_stream=audio_stream,
+                final_filename=final_filename,
+                final_output_path=final_path,
+                mux_container_format=container_fmt,
             )
 
         self.download_manager.enqueue(job)

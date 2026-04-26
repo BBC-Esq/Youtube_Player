@@ -158,13 +158,14 @@ class DownloadManager(QObject):
             if stream is None:
                 self._finish_fail(job, "No audio stream.")
                 return
-            bitrate = stream.abr or "unknown"
-            filename = f"{base_title}_Audio_{bitrate}.{stream.subtype}"
-            if len(filename) > 200:
-                ext = f".{stream.subtype}"
-                filename = f"{filename[:200 - len(ext)]}{ext}"
-            job.final_filename = filename
-            job.final_output_path = os.path.join(job.output_dir, filename)
+            if not job.final_filename:
+                bitrate = stream.abr or "unknown"
+                filename = f"{base_title}_Audio_{bitrate}.{stream.subtype}"
+                if len(filename) > 200:
+                    ext = f".{stream.subtype}"
+                    filename = f"{filename[:200 - len(ext)]}{ext}"
+                job.final_filename = filename
+                job.final_output_path = os.path.join(job.output_dir, filename)
 
             job.status = JobStatus.DOWNLOADING_AUDIO
             job.progress = 0
@@ -173,7 +174,7 @@ class DownloadManager(QObject):
             thread = DownloadThread(
                 stream=stream,
                 output_path=job.output_dir,
-                filename=filename,
+                filename=job.final_filename,
                 skip_existing=False,
             )
             thread.progress.connect(lambda p, jid=job.job_id: self._on_progress(jid, p))
@@ -191,21 +192,22 @@ class DownloadManager(QObject):
             self._finish_fail(job, "Missing stream.")
             return
 
-        res = video_stream.resolution or "unknown"
         video_filename = f".{prefix}_{base_title}_video_temp.{video_stream.subtype}"
         audio_filename = f".{prefix}_{base_title}_audio_temp.{audio_stream.subtype}"
         job.temp_video_path = os.path.join(job.output_dir, video_filename)
         job.temp_audio_path = os.path.join(job.output_dir, audio_filename)
 
-        container_fmt, container_ext = detect_mux_container(
-            video_stream.video_codec, audio_stream.audio_codec
-        )
-        final_filename = f"{base_title}_{res}{container_ext}"
-        if len(final_filename) > 200:
-            final_filename = f"{final_filename[:200 - len(container_ext)]}{container_ext}"
-        job.final_filename = final_filename
-        job.final_output_path = os.path.join(job.output_dir, final_filename)
-        job.mux_container_format = container_fmt
+        if not job.final_filename:
+            res = video_stream.resolution or "unknown"
+            container_fmt, container_ext = detect_mux_container(
+                video_stream.video_codec, audio_stream.audio_codec
+            )
+            final_filename = f"{base_title}_{res}{container_ext}"
+            if len(final_filename) > 200:
+                final_filename = f"{final_filename[:200 - len(container_ext)]}{container_ext}"
+            job.final_filename = final_filename
+            job.final_output_path = os.path.join(job.output_dir, final_filename)
+            job.mux_container_format = container_fmt
 
         job.status = JobStatus.DOWNLOADING_VIDEO
         job.progress = 0

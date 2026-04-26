@@ -113,6 +113,7 @@ class DownloadsPanel(QGroupBox):
         self.container_layout.addStretch()
         self.scroll.setWidget(self.container)
         outer.addWidget(self.scroll)
+        self.setVisible(False)
 
     def _refresh_count(self, jobs):
         active = sum(1 for j in jobs if j.status in (
@@ -156,3 +157,4 @@ class DownloadsPanel(QGroupBox):
 
     def sync(self, jobs):
         self._refresh_count(jobs)
+        self.setVisible(bool(self._rows))
