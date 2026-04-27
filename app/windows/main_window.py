@@ -18,7 +18,7 @@ from app.constants import (
 )
 from app.threads import FetchThread, CaptionDownloadThread, ThumbnailThread
 from app.dialogs import SettingsDialog
-from app.widgets import VideoPlayer, DownloadsPanel, Toast
+from app.widgets import VideoPlayer, DownloadsPanel, Toast, SearchPanel
 from app.core import DownloadManager, DownloadJob
 
 
@@ -71,7 +71,18 @@ class MainWindow(QMainWindow):
         self.url_entry.textChanged.connect(self.on_url_text_changed)
         url_layout.addWidget(url_label)
         url_layout.addWidget(self.url_entry)
+        self.search_toggle = QPushButton("Search")
+        self.search_toggle.setCheckable(True)
+        self.search_toggle.setFixedWidth(70)
+        self.search_toggle.toggled.connect(self._toggle_search)
+        url_layout.addWidget(self.search_toggle)
         self.main_layout.addWidget(url_frame)
+
+        self.search_panel = SearchPanel(self.settings)
+        self.search_panel.setVisible(False)
+        self.search_panel.url_selected.connect(self._on_search_url_selected)
+        self.search_panel.thread_created.connect(self._track_thread)
+        self.main_layout.addWidget(self.search_panel)
 
         self.use_oauth = QCheckBox("Use OAuth (required for some age-restricted videos)")
         self.main_layout.addWidget(self.use_oauth)
@@ -267,6 +278,17 @@ class MainWindow(QMainWindow):
         self.fetch_timer.stop()
         if text.strip():
             self.fetch_timer.start()
+
+    def _toggle_search(self, checked):
+        self.search_panel.setVisible(checked)
+        if checked:
+            self.search_panel.search_input.setFocus()
+
+    def _on_search_url_selected(self, url):
+        self.url_entry.blockSignals(True)
+        self.url_entry.setText(url)
+        self.url_entry.blockSignals(False)
+        self.fetch_video_info()
 
     def fetch_video_info(self):
         url = self.url_entry.text().strip()
