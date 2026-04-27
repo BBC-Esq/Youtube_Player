@@ -5,7 +5,7 @@ import webbrowser
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QComboBox, QFrame, QGroupBox, QMessageBox,
-    QCheckBox, QListWidget, QInputDialog
+    QCheckBox, QListWidget, QInputDialog, QSplitter
 )
 from PySide6.QtCore import Qt, Slot, Signal, QSettings, QTimer
 from PySide6.QtGui import QPixmap
@@ -28,7 +28,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("YouTube Downloader")
-        self.setGeometry(100, 100, 900, 780)
+        self.setGeometry(100, 100, 1200, 800)
 
         self.settings = QSettings("YouTubeDownloader", "YouTubeDownloader")
         self.streams_objects = []
@@ -57,7 +57,26 @@ class MainWindow(QMainWindow):
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        self.main_layout = QVBoxLayout(central_widget)
+        outer = QHBoxLayout(central_widget)
+        outer.setContentsMargins(4, 4, 4, 4)
+        outer.setSpacing(0)
+
+        self.splitter = QSplitter(Qt.Horizontal)
+        outer.addWidget(self.splitter)
+
+        self.search_panel = SearchPanel(self.settings)
+        self.search_panel.url_selected.connect(self._on_search_url_selected)
+        self.search_panel.thread_created.connect(self._track_thread)
+        self.search_panel.setMinimumWidth(300)
+        self.splitter.addWidget(self.search_panel)
+
+        right_container = QWidget()
+        self.right_layout = QVBoxLayout(right_container)
+        right_container.setMinimumWidth(500)
+        self.splitter.addWidget(right_container)
+        self.splitter.setSizes([380, 820])
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
 
         url_frame = QFrame()
         url_layout = QHBoxLayout(url_frame)
@@ -71,37 +90,26 @@ class MainWindow(QMainWindow):
         self.url_entry.textChanged.connect(self.on_url_text_changed)
         url_layout.addWidget(url_label)
         url_layout.addWidget(self.url_entry)
-        self.search_toggle = QPushButton("Search")
-        self.search_toggle.setCheckable(True)
-        self.search_toggle.setFixedWidth(70)
-        self.search_toggle.toggled.connect(self._toggle_search)
-        url_layout.addWidget(self.search_toggle)
-        self.main_layout.addWidget(url_frame)
-
-        self.search_panel = SearchPanel(self.settings)
-        self.search_panel.setVisible(False)
-        self.search_panel.url_selected.connect(self._on_search_url_selected)
-        self.search_panel.thread_created.connect(self._track_thread)
-        self.main_layout.addWidget(self.search_panel)
+        self.right_layout.addWidget(url_frame)
 
         self.use_oauth = QCheckBox("Use OAuth (required for some age-restricted videos)")
-        self.main_layout.addWidget(self.use_oauth)
+        self.right_layout.addWidget(self.use_oauth)
 
         self.error_label = QLabel()
         self.error_label.setStyleSheet("color: red;")
-        self.main_layout.addWidget(self.error_label)
+        self.right_layout.addWidget(self.error_label)
 
         self.title_label = QLabel()
         self.title_label.setAlignment(Qt.AlignCenter)
         self.title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         self.title_label.setWordWrap(True)
-        self.main_layout.addWidget(self.title_label)
+        self.right_layout.addWidget(self.title_label)
 
         self.player = VideoPlayer()
         self.player.fullscreen_toggled.connect(self._handle_fullscreen)
         self.player.error_occurred.connect(self._player_error)
         self.player.play_requested.connect(self.preview_video)
-        self.main_layout.addWidget(self.player, stretch=1)
+        self.right_layout.addWidget(self.player, stretch=1)
 
         self.playback_frame = QFrame()
         playback_layout = QHBoxLayout(self.playback_frame)
@@ -138,7 +146,7 @@ class MainWindow(QMainWindow):
         self.pb_audio_combo.currentIndexChanged.connect(self._on_pb_selection_changed)
 
         playback_layout.addStretch()
-        self.main_layout.addWidget(self.playback_frame)
+        self.right_layout.addWidget(self.playback_frame)
 
         self.options_group = QGroupBox("Download Options")
         options_layout = QVBoxLayout(self.options_group)
@@ -219,7 +227,7 @@ class MainWindow(QMainWindow):
 
         options_layout.addLayout(combos_layout)
 
-        self.main_layout.addWidget(self.options_group)
+        self.right_layout.addWidget(self.options_group)
 
         download_row = QHBoxLayout()
         self.download_button = QPushButton("Add to Queue")
@@ -228,7 +236,7 @@ class MainWindow(QMainWindow):
         self.download_button.setStyleSheet("font-size: 14px; font-weight: bold;")
         self.download_button.clicked.connect(self.enqueue_download)
         download_row.addWidget(self.download_button)
-        self.main_layout.addLayout(download_row)
+        self.right_layout.addLayout(download_row)
 
         self.transcripts_group = QGroupBox("Transcripts")
         transcripts_layout = QHBoxLayout(self.transcripts_group)
@@ -240,15 +248,15 @@ class MainWindow(QMainWindow):
         self.transcript_download_button.setFixedWidth(90)
         self.transcript_download_button.clicked.connect(self.download_transcript)
         transcripts_layout.addWidget(self.transcript_download_button)
-        self.main_layout.addWidget(self.transcripts_group)
+        self.right_layout.addWidget(self.transcripts_group)
 
         self.downloads_panel = DownloadsPanel()
         self.downloads_panel.cancel_requested.connect(self.download_manager.cancel)
         self.downloads_panel.remove_requested.connect(self._remove_job)
-        self.main_layout.addWidget(self.downloads_panel)
+        self.right_layout.addWidget(self.downloads_panel)
 
         self.status_label = QLabel("Paste a YouTube URL above to get started.")
-        self.main_layout.addWidget(self.status_label)
+        self.right_layout.addWidget(self.status_label)
 
         self.toast = Toast(self)
 
@@ -278,11 +286,6 @@ class MainWindow(QMainWindow):
         self.fetch_timer.stop()
         if text.strip():
             self.fetch_timer.start()
-
-    def _toggle_search(self, checked):
-        self.search_panel.setVisible(checked)
-        if checked:
-            self.search_panel.search_input.setFocus()
 
     def _on_search_url_selected(self, url):
         self.url_entry.blockSignals(True)
@@ -441,8 +444,11 @@ class MainWindow(QMainWindow):
         if entering:
             self._pre_fullscreen_geometry = self.geometry()
             self._fullscreen_hidden_widgets = []
-            for i in range(self.main_layout.count()):
-                w = self.main_layout.itemAt(i).widget()
+            if self.search_panel.isVisible():
+                self._fullscreen_hidden_widgets.append(self.search_panel)
+                self.search_panel.hide()
+            for i in range(self.right_layout.count()):
+                w = self.right_layout.itemAt(i).widget()
                 if w and w is not self.player:
                     if w.isVisible():
                         self._fullscreen_hidden_widgets.append(w)
