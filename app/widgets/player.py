@@ -320,6 +320,8 @@ class VideoPlayer(QWidget):
             return
         self._media_player.stop()
         self._is_playing = False
+        self._current_video_url = None
+        self._current_audio_url = None
         self.play_button.setText("Play")
         self._poll_timer.stop()
         self.position_slider.setValue(0)
