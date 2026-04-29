@@ -31,6 +31,9 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 1200, 800)
 
         self.settings = QSettings("YouTubeDownloader", "YouTubeDownloader")
+        saved_geometry = self.settings.value("window_geometry")
+        if saved_geometry:
+            self.restoreGeometry(saved_geometry)
         self.streams_objects = []
         self.video_streams = []
         self.audio_streams = []
@@ -77,6 +80,9 @@ class MainWindow(QMainWindow):
         self.splitter.setSizes([380, 820])
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
+        saved_sizes = self.settings.value("splitter_sizes")
+        if saved_sizes:
+            self.splitter.setSizes([int(s) for s in saved_sizes])
 
         url_frame = QFrame()
         url_layout = QHBoxLayout(url_frame)
@@ -936,6 +942,8 @@ class MainWindow(QMainWindow):
             self.toast.reposition()
 
     def closeEvent(self, event):
+        self.settings.setValue("window_geometry", self.saveGeometry())
+        self.settings.setValue("splitter_sizes", self.splitter.sizes())
         self._oauth_event.set()
         self.player.release()
         self.download_manager.cancel_all()

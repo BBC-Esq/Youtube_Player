@@ -24,6 +24,7 @@ class SearchThread(QThread):
                     "url": video.watch_url,
                     "views": video.views,
                     "thumbnail_url": video.thumbnail_url or "",
+                    "channel_url": video.channel_url or "",
                 })
             suggestions = []
             try:
@@ -56,6 +57,7 @@ class NextPageThread(QThread):
                     "url": video.watch_url,
                     "views": video.views,
                     "thumbnail_url": video.thumbnail_url or "",
+                    "channel_url": video.channel_url or "",
                 })
             self.finished.emit(results)
         except Exception as e:

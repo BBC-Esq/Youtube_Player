@@ -1,3 +1,5 @@
+import re
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QScrollArea, QFrame, QSizePolicy, QCompleter, QApplication
@@ -7,6 +9,12 @@ from PySide6.QtGui import QPixmap, QFont, QCursor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from app.threads.search import SearchThread, NextPageThread
+from app.threads.channel import ChannelThread, ChannelBatchThread
+
+_CHANNEL_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?youtube\.com/"
+    r"(?:channel/|@|c/|user/)"
+)
 
 
 def _format_views(views):
@@ -33,6 +41,7 @@ def _format_duration(seconds):
 
 class ResultCard(QFrame):
     clicked = Signal(dict)
+    channel_requested = Signal(str)
 
     def __init__(self, data, parent=None):
         super().__init__(parent)
@@ -45,6 +54,7 @@ class ResultCard(QFrame):
         self.setAutoFillBackground(True)
         self._selected = False
         self._default_palette = self.palette()
+        self._overlay = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 8, 12, 8)
@@ -85,13 +95,22 @@ class ResultCard(QFrame):
         self.title_label.setFont(QFont("", 11, QFont.Bold))
         self.title_label.setWordWrap(True)
         self.title_label.setMaximumHeight(40)
+        self.title_label.setAttribute(Qt.WA_TransparentForMouseEvents)
         info.addWidget(self.title_label)
 
         author = data.get("author", "")
+        channel_url = data.get("channel_url", "")
         if author:
-            author_label = QLabel(author)
-            author_label.setStyleSheet("font-size: 11px;")
-            info.addWidget(author_label)
+            self.author_label = QLabel(author)
+            if channel_url:
+                self.author_label.setStyleSheet("font-size: 11px; color: #5b9bd5;")
+                self.author_label.setCursor(QCursor(Qt.PointingHandCursor))
+                self.author_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+                self.author_label.installEventFilter(self)
+            else:
+                self.author_label.setStyleSheet("font-size: 11px;")
+                self.author_label.setAttribute(Qt.WA_TransparentForMouseEvents)
+            info.addWidget(self.author_label)
 
         meta_parts = []
         views_str = _format_views(data.get("views"))
@@ -103,6 +122,7 @@ class ResultCard(QFrame):
         if meta_parts:
             meta_label = QLabel(" · ".join(meta_parts))
             meta_label.setStyleSheet("font-size: 11px;")
+            meta_label.setAttribute(Qt.WA_TransparentForMouseEvents)
             info.addWidget(meta_label)
 
         info.addStretch()
@@ -147,13 +167,19 @@ class ResultCard(QFrame):
         self.setPalette(pal)
 
     def eventFilter(self, obj, event):
-        if obj is self._overlay and event.type() == event.Type.MouseButtonPress:
+        if self._overlay is not None and obj is self._overlay and event.type() == event.Type.MouseButtonPress:
             if event.button() == Qt.LeftButton:
                 url = self.data.get("url", "")
                 if url:
                     QApplication.clipboard().setText(url)
                     self._overlay.setText("Copied!")
                     QTimer.singleShot(800, lambda: self._overlay.setText("Copy URL"))
+                return True
+        if hasattr(self, "author_label") and obj is self.author_label:
+            if event.type() == event.Type.MouseButtonPress and event.button() == Qt.LeftButton:
+                channel_url = self.data.get("channel_url", "")
+                if channel_url:
+                    self.channel_requested.emit(channel_url)
                 return True
         return super().eventFilter(obj, event)
 
@@ -192,12 +218,40 @@ class SearchPanel(QWidget):
         self._thumb_map = {}
         self._settings = settings
         self._search_history = self._settings.value("search_history", []) or []
+        self._mode = "search"
+        self._channel_name = ""
+        self._channel_url = ""
+        self._channel_total = 0
+        self._channel_loaded_count = 0
+        self._saved_search_results = None
+        self._saved_search_status = ""
+        self._saved_search_suggestions = None
+        self._saved_search_load_more = False
+        self._saved_selected_url = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        search_row = QHBoxLayout()
+        self.channel_header = QWidget()
+        channel_header_layout = QHBoxLayout(self.channel_header)
+        channel_header_layout.setContentsMargins(0, 0, 0, 0)
+        channel_header_layout.setSpacing(6)
+        self.back_button = QPushButton("← Search")
+        self.back_button.setFixedWidth(80)
+        self.back_button.setFixedHeight(32)
+        self.back_button.clicked.connect(self._back_to_search)
+        channel_header_layout.addWidget(self.back_button)
+        self.channel_name_label = QLabel()
+        self.channel_name_label.setFont(QFont("", 12, QFont.Bold))
+        self.channel_name_label.setWordWrap(True)
+        channel_header_layout.addWidget(self.channel_name_label, stretch=1)
+        self.channel_header.hide()
+        layout.addWidget(self.channel_header)
+
+        self.search_row_widget = QWidget()
+        search_row = QHBoxLayout(self.search_row_widget)
+        search_row.setContentsMargins(0, 0, 0, 0)
         search_row.setSpacing(6)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search YouTube...")
@@ -218,9 +272,11 @@ class SearchPanel(QWidget):
         self.search_button.setFixedWidth(90)
         self.search_button.clicked.connect(self.do_search)
         search_row.addWidget(self.search_button)
-        layout.addLayout(search_row)
+        layout.addWidget(self.search_row_widget)
 
-        filter_row = QHBoxLayout()
+        self.filter_widget = QWidget()
+        filter_row = QHBoxLayout(self.filter_widget)
+        filter_row.setContentsMargins(0, 0, 0, 0)
         filter_row.setSpacing(6)
         filter_row.addWidget(QLabel("Sort:"))
         self.sort_combo = QComboBox()
@@ -239,7 +295,7 @@ class SearchPanel(QWidget):
         self.quality_combo.addItems(["Any", "HD", "4K"])
         filter_row.addWidget(self.quality_combo)
         filter_row.addStretch()
-        layout.addLayout(filter_row)
+        layout.addWidget(self.filter_widget)
 
         self.suggestions_label = QLabel()
         self.suggestions_label.setWordWrap(True)
@@ -272,6 +328,44 @@ class SearchPanel(QWidget):
         self.status_label.setStyleSheet("font-size: 11px;")
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
+
+    def _enter_channel_mode(self, channel_name):
+        self._mode = "channel"
+        self._channel_name = channel_name
+        self.channel_name_label.setText(channel_name)
+        self.channel_header.show()
+        self.search_row_widget.hide()
+        self.filter_widget.hide()
+        self.suggestions_label.setVisible(False)
+
+    def _back_to_search(self):
+        self._mode = "search"
+        self._channel_name = ""
+        self._channel_url = ""
+        self._channel_total = 0
+        self._channel_loaded_count = 0
+        self._clear_results()
+        self.channel_header.hide()
+        self.search_row_widget.show()
+        self.filter_widget.show()
+
+        if self._saved_search_results:
+            self._add_result_cards(self._saved_search_results)
+            if self._saved_selected_url:
+                for card in self._cards:
+                    if card.data.get("url") == self._saved_selected_url:
+                        card.set_selected(True)
+                        self._selected_card = card.data
+                        break
+            self.status_label.setText(self._saved_search_status or "")
+            if self._saved_search_suggestions:
+                self.suggestions_label.setText(self._saved_search_suggestions)
+                self.suggestions_label.setVisible(True)
+            self.load_more_button.setEnabled(self._saved_search_load_more)
+            self._saved_search_results = None
+        else:
+            self.load_more_button.setEnabled(False)
+            self.status_label.setText("Enter a search query.")
 
     def _build_filters(self):
         from pytubefix.contrib.search import Filter
@@ -338,6 +432,13 @@ class SearchPanel(QWidget):
         if not query:
             return
 
+        if _CHANNEL_URL_RE.search(query):
+            self.load_channel(query)
+            return
+
+        if self._mode == "channel":
+            self._back_to_search()
+
         self._clear_results()
         self.suggestions_label.setVisible(False)
         self.search_button.setEnabled(False)
@@ -367,10 +468,53 @@ class SearchPanel(QWidget):
         from pytubefix import Search
         self._search_obj = Search(query, filters=filters)
 
+    def load_channel(self, channel_url):
+        if self._mode == "search" and self._cards:
+            self._saved_search_results = [card.data for card in self._cards]
+            self._saved_search_status = self.status_label.text()
+            self._saved_search_suggestions = (
+                self.suggestions_label.text()
+                if self.suggestions_label.isVisible() else None
+            )
+            self._saved_search_load_more = self.load_more_button.isEnabled()
+            self._saved_selected_url = (
+                self._selected_card.get("url") if self._selected_card else None
+            )
+        self._clear_results()
+        self._channel_url = channel_url
+        self._channel_total = 0
+        self._channel_loaded_count = 0
+        self._enter_channel_mode("Loading channel...")
+        self.load_more_button.setEnabled(False)
+        self.status_label.setText("Loading channel videos...")
+
+        thread = ChannelThread(channel_url)
+        thread.finished.connect(self._on_channel_loaded)
+        thread.error.connect(self._on_channel_error)
+        thread.start()
+        self._threads.append(thread)
+        self.thread_created.emit(thread)
+
+    def _on_channel_loaded(self, name, results, total):
+        self._channel_name = name
+        self._channel_total = total
+        self._channel_loaded_count = len(results)
+        self.channel_name_label.setText(name)
+        self._add_result_cards(results)
+        self.status_label.setText(
+            f"Showing {len(results)} of {total} videos."
+        )
+        self.load_more_button.setEnabled(self._channel_loaded_count < total)
+
+    def _on_channel_error(self, msg):
+        self.status_label.setText(f"Channel error: {msg}")
+        self._back_to_search()
+
     def _add_result_cards(self, results):
         for r in results:
             card = ResultCard(r)
             card.clicked.connect(self._on_card_clicked)
+            card.channel_requested.connect(self._on_channel_requested)
             insert_pos = self.results_layout.count() - 1
             self.results_layout.insertWidget(insert_pos, card)
             self._cards.append(card)
@@ -388,6 +532,11 @@ class SearchPanel(QWidget):
             if not pixmap.isNull():
                 card.set_thumbnail(pixmap)
         reply.deleteLater()
+
+    def _on_channel_requested(self, channel_url):
+        if self._mode == "channel" and self._channel_url == channel_url:
+            return
+        self.load_channel(channel_url)
 
     def _on_card_clicked(self, data):
         for card in self._cards:
@@ -419,18 +568,24 @@ class SearchPanel(QWidget):
         self.status_label.setText(f"Search error: {msg}")
 
     def load_more(self):
+        if self._mode == "channel":
+            self._load_more_channel()
+        else:
+            self._load_more_search()
+
+    def _load_more_search(self):
         if self._search_obj is None:
             return
         self.load_more_button.setEnabled(False)
         self.status_label.setText("Loading more results...")
         thread = NextPageThread(self._search_obj)
-        thread.finished.connect(self._on_more_results)
+        thread.finished.connect(self._on_more_search_results)
         thread.error.connect(self._on_search_error)
         thread.start()
         self._threads.append(thread)
         self.thread_created.emit(thread)
 
-    def _on_more_results(self, results):
+    def _on_more_search_results(self, results):
         self._clear_results()
         self._add_result_cards(results)
         count = len(self._cards)
@@ -438,3 +593,28 @@ class SearchPanel(QWidget):
             f"Showing {count} results. Click a result to load it."
         )
         self.load_more_button.setEnabled(True)
+
+    def _load_more_channel(self):
+        if not self._channel_url:
+            return
+        self.load_more_button.setEnabled(False)
+        self.status_label.setText("Loading more videos...")
+
+        thread = ChannelBatchThread(
+            self._channel_url, self._channel_name,
+            self._channel_loaded_count
+        )
+        thread.finished.connect(self._on_more_channel_results)
+        thread.error.connect(self._on_channel_error)
+        thread.start()
+        self._threads.append(thread)
+        self.thread_created.emit(thread)
+
+    def _on_more_channel_results(self, results):
+        self._channel_loaded_count += len(results)
+        self._add_result_cards(results)
+        total = self._channel_total
+        self.status_label.setText(
+            f"Showing {self._channel_loaded_count} of {total} videos."
+        )
+        self.load_more_button.setEnabled(self._channel_loaded_count < total)
