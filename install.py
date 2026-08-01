@@ -7,11 +7,13 @@ import os
 
 os.system("")
 
+# Versions are pinned deliberately. Do not bump a pin without first reviewing the
+# upstream changes between the current pin and the new version.
 libs_with_deps = [
-    "pyside6",
-    "av",
-    "pytubefix",
-    "python-vlc"
+    "pyside6==6.10.2",
+    "av==17.0.0",
+    "pytubefix==10.5.0",
+    "python-vlc==3.0.21203"
 ]
 
 libs_no_deps = []
