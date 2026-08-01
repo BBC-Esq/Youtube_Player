@@ -7,8 +7,6 @@ import os
 
 os.system("")
 
-# Versions are pinned deliberately. Do not bump a pin without first reviewing the
-# upstream changes between the current pin and the new version.
 libs_with_deps = [
     "pyside6==6.10.2",
     "av==17.0.0",
