@@ -462,12 +462,6 @@ class SearchPanel(QWidget):
         self._threads.append(thread)
         self.thread_created.emit(thread)
 
-        self._keep_search_obj(query, filters)
-
-    def _keep_search_obj(self, query, filters):
-        from pytubefix import Search
-        self._search_obj = Search(query, filters=filters)
-
     def load_channel(self, channel_url):
         if self._mode == "search" and self._cards:
             self._saved_search_results = [card.data for card in self._cards]
@@ -549,12 +543,13 @@ class SearchPanel(QWidget):
 
     def _on_search_finished(self, results):
         self.search_button.setEnabled(True)
+        self._search_obj = getattr(self.sender(), "search", None)
         self._add_result_cards(results)
         count = len(results)
         self.status_label.setText(
             f"Found {count} result{'s' if count != 1 else ''}. Click a result to load it."
         )
-        self.load_more_button.setEnabled(True)
+        self.load_more_button.setEnabled(self._search_obj is not None)
 
     def _on_suggestions(self, suggestions):
         if suggestions:

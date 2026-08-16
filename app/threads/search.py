@@ -50,6 +50,7 @@ class SearchThread(QThread):
         super().__init__()
         self.query = query
         self.filters = filters
+        self.search = None
 
     def run(self):
         try:
@@ -60,6 +61,7 @@ class SearchThread(QThread):
                 data = _extract_video_data(video)
                 if data:
                     results.append(data)
+            self.search = s
             suggestions = []
             try:
                 suggestions = s.completion_suggestions or []
