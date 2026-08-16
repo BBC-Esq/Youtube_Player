@@ -331,8 +331,15 @@ class MainWindow(QMainWindow):
         self.fetch_thread.finished.connect(self.update_info)
         self.fetch_thread.error.connect(self.show_error)
         self.fetch_thread.client_switched.connect(self.show_client_switch)
+        self.fetch_thread.retrying.connect(self.show_fetch_retrying)
         self.fetch_thread.start()
         self._track_thread(self.fetch_thread)
+
+    @Slot()
+    def show_fetch_retrying(self):
+        if self.sender() is not getattr(self, 'fetch_thread', None):
+            return
+        self.status_label.setText("YouTube refused the request, retrying...")
 
     @Slot(str, str)
     def show_client_switch(self, original_client, new_client):
