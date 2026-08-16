@@ -223,6 +223,7 @@ class SearchPanel(QWidget):
         self._channel_url = ""
         self._channel_total = 0
         self._channel_loaded_count = 0
+        self._channel_videos = None
         self._saved_search_results = None
         self._saved_search_status = ""
         self._saved_search_suggestions = None
@@ -344,6 +345,7 @@ class SearchPanel(QWidget):
         self._channel_url = ""
         self._channel_total = 0
         self._channel_loaded_count = 0
+        self._channel_videos = None
         self._clear_results()
         self.channel_header.hide()
         self.search_row_widget.show()
@@ -482,6 +484,7 @@ class SearchPanel(QWidget):
         self._channel_url = channel_url
         self._channel_total = 0
         self._channel_loaded_count = 0
+        self._channel_videos = None
         self._enter_channel_mode("Loading channel...")
         self.load_more_button.setEnabled(False)
         self.status_label.setText("Loading channel videos...")
@@ -492,10 +495,11 @@ class SearchPanel(QWidget):
         thread.start()
         self._track_thread(thread)
 
-    def _on_channel_loaded(self, name, results, total):
+    def _on_channel_loaded(self, name, results, total, videos):
         self._channel_name = name
         self._channel_total = total
         self._channel_loaded_count = len(results)
+        self._channel_videos = videos
         self.channel_name_label.setText(name)
         self._add_result_cards(results)
         self.status_label.setText(
@@ -592,13 +596,13 @@ class SearchPanel(QWidget):
         self.load_more_button.setEnabled(True)
 
     def _load_more_channel(self):
-        if not self._channel_url:
+        if not self._channel_url or self._channel_videos is None:
             return
         self.load_more_button.setEnabled(False)
         self.status_label.setText("Loading more videos...")
 
         thread = ChannelBatchThread(
-            self._channel_url, self._channel_name,
+            self._channel_videos, self._channel_name, self._channel_url,
             self._channel_loaded_count
         )
         thread.finished.connect(self._on_more_channel_results)
