@@ -884,6 +884,7 @@ class MainWindow(QMainWindow):
         self.url_entry.setEnabled(True)
 
     def _track_thread(self, thread):
+        self._active_threads = [t for t in self._active_threads if not t.isFinished()]
         self._active_threads.append(thread)
 
     def _oauth_verifier(self, verification_url, user_code):

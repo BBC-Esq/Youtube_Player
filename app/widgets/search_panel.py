@@ -418,6 +418,11 @@ class SearchPanel(QWidget):
             f = f.feature([quality_map[quality_text]])
         return f
 
+    def _track_thread(self, thread):
+        self._threads = [t for t in self._threads if not t.isFinished()]
+        self._threads.append(thread)
+        self.thread_created.emit(thread)
+
     def _clear_results(self):
         for card in self._cards:
             card.setParent(None)
@@ -459,8 +464,7 @@ class SearchPanel(QWidget):
         thread.suggestions_ready.connect(self._on_suggestions)
         thread.error.connect(self._on_search_error)
         thread.start()
-        self._threads.append(thread)
-        self.thread_created.emit(thread)
+        self._track_thread(thread)
 
     def load_channel(self, channel_url):
         if self._mode == "search" and self._cards:
@@ -486,8 +490,7 @@ class SearchPanel(QWidget):
         thread.finished.connect(self._on_channel_loaded)
         thread.error.connect(self._on_channel_error)
         thread.start()
-        self._threads.append(thread)
-        self.thread_created.emit(thread)
+        self._track_thread(thread)
 
     def _on_channel_loaded(self, name, results, total):
         self._channel_name = name
@@ -577,8 +580,7 @@ class SearchPanel(QWidget):
         thread.finished.connect(self._on_more_search_results)
         thread.error.connect(self._on_search_error)
         thread.start()
-        self._threads.append(thread)
-        self.thread_created.emit(thread)
+        self._track_thread(thread)
 
     def _on_more_search_results(self, results):
         self._clear_results()
@@ -602,8 +604,7 @@ class SearchPanel(QWidget):
         thread.finished.connect(self._on_more_channel_results)
         thread.error.connect(self._on_channel_error)
         thread.start()
-        self._threads.append(thread)
-        self.thread_created.emit(thread)
+        self._track_thread(thread)
 
     def _on_more_channel_results(self, results):
         self._channel_loaded_count += len(results)
