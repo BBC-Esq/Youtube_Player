@@ -22,6 +22,10 @@ from app.widgets import VideoPlayer, DownloadsPanel, Toast, SearchPanel
 from app.core import DownloadManager, DownloadJob
 
 
+def _abr_value(stream):
+    return int(stream.abr.replace("kbps", "")) if stream.abr else 0
+
+
 class MainWindow(QMainWindow):
     _oauth_dialog_requested = Signal(str, str)
 
@@ -482,10 +486,7 @@ class MainWindow(QMainWindow):
     def _player_error(self, msg):
         self.error_label.setText(f"Player: {msg}")
 
-    def populate_resolution_combo(self):
-        self.resolution_combo.blockSignals(True)
-        self.resolution_combo.clear()
-
+    def _sorted_resolutions(self):
         resolutions = {}
         for s in self.video_streams:
             res = s.resolution
@@ -493,106 +494,20 @@ class MainWindow(QMainWindow):
                 fps = getattr(s, 'fps', 30)
                 res_num = int(res.replace("p", "")) if res.replace("p", "").isdigit() else 0
                 resolutions[res] = (res_num, fps)
+        return sorted(resolutions.keys(), key=lambda r: resolutions[r], reverse=True)
 
-        sorted_res = sorted(resolutions.keys(), key=lambda r: resolutions[r], reverse=True)
+    def _fill_resolution_combo(self, combo, on_changed):
+        combo.blockSignals(True)
+        combo.clear()
+        sorted_res = self._sorted_resolutions()
         for res in sorted_res:
-            self.resolution_combo.addItem(res)
-
-        self.resolution_combo.blockSignals(False)
+            combo.addItem(res)
+        combo.blockSignals(False)
         if sorted_res:
-            self.on_resolution_changed()
+            on_changed()
 
-    def on_resolution_changed(self):
-        self.video_format_combo.clear()
-        resolution = self.resolution_combo.currentText()
-        if not resolution:
-            return
-
-        matching = [s for s in self.video_streams if s.resolution == resolution]
-        matching.sort(key=lambda s: s.filesize_mb if s.filesize_mb else 0)
-
-        for s in matching:
-            raw_codec = s.video_codec.split(".")[0] if s.video_codec else ""
-            codec_display = VIDEO_CODEC_NAMES.get(raw_codec, raw_codec or s.subtype)
-            fps = getattr(s, 'fps', '')
-            fps_str = f" {fps}fps" if fps and fps != 30 else ""
-            bitrate = s.bitrate
-            if bitrate and bitrate >= 1_000_000:
-                br_str = f" {bitrate / 1_000_000:.1f} Mbps"
-            elif bitrate:
-                br_str = f" {bitrate // 1000} kbps"
-            else:
-                br_str = ""
-            size = f"{s.filesize_mb:.1f} MB" if s.filesize_mb else "? MB"
-            label = f"{s.subtype.upper()} ({codec_display}){fps_str}{br_str} - {size}"
-            idx = self.video_format_combo.count()
-            self.video_format_combo.addItem(label, userData=s.itag)
-            tooltip = VIDEO_CODEC_TOOLTIPS.get(codec_display, "")
-            if tooltip:
-                self.video_format_combo.setItemData(idx, tooltip, Qt.ToolTipRole)
-
-        self.update_format_tooltip(self.video_format_combo.currentIndex())
-
-    def update_format_tooltip(self, index):
-        if index >= 0:
-            tooltip = self.video_format_combo.itemData(index, Qt.ToolTipRole)
-            self.video_format_combo.setToolTip(tooltip or "")
-        else:
-            self.video_format_combo.setToolTip("")
-
-    def update_audio_tooltip(self, index):
-        if index >= 0:
-            tooltip = self.audio_quality_combo.itemData(index, Qt.ToolTipRole)
-            self.audio_quality_combo.setToolTip(tooltip or "")
-        else:
-            self.audio_quality_combo.setToolTip("")
-
-    def populate_audio_quality_combo(self):
-        self.audio_quality_combo.clear()
-
-        sorted_audio = sorted(
-            self.audio_streams,
-            key=lambda s: int(s.abr.replace("kbps", "")) if s.abr else 0,
-            reverse=True
-        )
-
-        for s in sorted_audio:
-            raw_codec = s.audio_codec.split(".")[0] if s.audio_codec else ""
-            codec_display = AUDIO_CODEC_NAMES.get(raw_codec, raw_codec or s.subtype)
-            bitrate = s.abr or "?"
-            size = f"{s.filesize_mb:.1f} MB" if s.filesize_mb else "? MB"
-            label = f"{bitrate} - {s.subtype.upper()} ({codec_display}) - {size}"
-            idx = self.audio_quality_combo.count()
-            self.audio_quality_combo.addItem(label, userData=s.itag)
-            tooltip = AUDIO_CODEC_TOOLTIPS.get(codec_display, "")
-            if tooltip:
-                self.audio_quality_combo.setItemData(idx, tooltip, Qt.ToolTipRole)
-
-        self.update_audio_tooltip(self.audio_quality_combo.currentIndex())
-
-    def populate_pb_resolution_combo(self):
-        self.pb_resolution_combo.blockSignals(True)
-        self.pb_resolution_combo.clear()
-
-        resolutions = {}
-        for s in self.video_streams:
-            res = s.resolution
-            if res and res not in resolutions:
-                fps = getattr(s, 'fps', 30)
-                res_num = int(res.replace("p", "")) if res.replace("p", "").isdigit() else 0
-                resolutions[res] = (res_num, fps)
-
-        sorted_res = sorted(resolutions.keys(), key=lambda r: resolutions[r], reverse=True)
-        for res in sorted_res:
-            self.pb_resolution_combo.addItem(res)
-
-        self.pb_resolution_combo.blockSignals(False)
-        if sorted_res:
-            self.on_pb_resolution_changed()
-
-    def on_pb_resolution_changed(self):
-        self.pb_format_combo.clear()
-        resolution = self.pb_resolution_combo.currentText()
+    def _fill_format_combo(self, combo, resolution, include_size, with_tooltips):
+        combo.clear()
         if not resolution:
             return
 
@@ -612,23 +527,76 @@ class MainWindow(QMainWindow):
             else:
                 br_str = ""
             label = f"{s.subtype.upper()} ({codec_display}){fps_str}{br_str}"
-            self.pb_format_combo.addItem(label, userData=s.itag)
+            if include_size:
+                size = f"{s.filesize_mb:.1f} MB" if s.filesize_mb else "? MB"
+                label = f"{label} - {size}"
+            idx = combo.count()
+            combo.addItem(label, userData=s.itag)
+            if with_tooltips:
+                tooltip = VIDEO_CODEC_TOOLTIPS.get(codec_display, "")
+                if tooltip:
+                    combo.setItemData(idx, tooltip, Qt.ToolTipRole)
 
-    def populate_pb_audio_combo(self):
-        self.pb_audio_combo.clear()
+    def _fill_audio_combo(self, combo, include_size, with_tooltips):
+        combo.clear()
 
-        sorted_audio = sorted(
-            self.audio_streams,
-            key=lambda s: int(s.abr.replace("kbps", "")) if s.abr else 0,
-            reverse=True
-        )
-
-        for s in sorted_audio:
+        for s in sorted(self.audio_streams, key=_abr_value, reverse=True):
             raw_codec = s.audio_codec.split(".")[0] if s.audio_codec else ""
             codec_display = AUDIO_CODEC_NAMES.get(raw_codec, raw_codec or s.subtype)
             bitrate = s.abr or "?"
-            label = f"{bitrate} ({codec_display})"
-            self.pb_audio_combo.addItem(label, userData=s.itag)
+            if include_size:
+                size = f"{s.filesize_mb:.1f} MB" if s.filesize_mb else "? MB"
+                label = f"{bitrate} - {s.subtype.upper()} ({codec_display}) - {size}"
+            else:
+                label = f"{bitrate} ({codec_display})"
+            idx = combo.count()
+            combo.addItem(label, userData=s.itag)
+            if with_tooltips:
+                tooltip = AUDIO_CODEC_TOOLTIPS.get(codec_display, "")
+                if tooltip:
+                    combo.setItemData(idx, tooltip, Qt.ToolTipRole)
+
+    def populate_resolution_combo(self):
+        self._fill_resolution_combo(self.resolution_combo, self.on_resolution_changed)
+
+    def on_resolution_changed(self):
+        resolution = self.resolution_combo.currentText()
+        self._fill_format_combo(
+            self.video_format_combo, resolution,
+            include_size=True, with_tooltips=True
+        )
+        if resolution:
+            self.update_format_tooltip(self.video_format_combo.currentIndex())
+
+    def update_format_tooltip(self, index):
+        if index >= 0:
+            tooltip = self.video_format_combo.itemData(index, Qt.ToolTipRole)
+            self.video_format_combo.setToolTip(tooltip or "")
+        else:
+            self.video_format_combo.setToolTip("")
+
+    def update_audio_tooltip(self, index):
+        if index >= 0:
+            tooltip = self.audio_quality_combo.itemData(index, Qt.ToolTipRole)
+            self.audio_quality_combo.setToolTip(tooltip or "")
+        else:
+            self.audio_quality_combo.setToolTip("")
+
+    def populate_audio_quality_combo(self):
+        self._fill_audio_combo(self.audio_quality_combo, include_size=True, with_tooltips=True)
+        self.update_audio_tooltip(self.audio_quality_combo.currentIndex())
+
+    def populate_pb_resolution_combo(self):
+        self._fill_resolution_combo(self.pb_resolution_combo, self.on_pb_resolution_changed)
+
+    def on_pb_resolution_changed(self):
+        self._fill_format_combo(
+            self.pb_format_combo, self.pb_resolution_combo.currentText(),
+            include_size=False, with_tooltips=False
+        )
+
+    def populate_pb_audio_combo(self):
+        self._fill_audio_combo(self.pb_audio_combo, include_size=False, with_tooltips=False)
 
     def toggle_audio_only(self, checked):
         self.res_label.setVisible(not checked)
@@ -665,10 +633,7 @@ class MainWindow(QMainWindow):
         if not candidates:
             candidates = self.audio_streams
 
-        candidates.sort(
-            key=lambda s: int(s.abr.replace("kbps", "")) if s.abr else 0,
-            reverse=True
-        )
+        candidates.sort(key=_abr_value, reverse=True)
         return candidates[0] if candidates else None
 
     def _build_conversion_params(self):
