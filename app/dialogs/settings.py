@@ -1,9 +1,11 @@
 import os
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGroupBox,
-    QLineEdit, QPushButton, QFileDialog, QMessageBox
+    QLineEdit, QPushButton, QFileDialog, QMessageBox, QCheckBox
 )
 from PySide6.QtCore import QSettings
+
+from app.core.adblock import AUTOPLAY_SETTING_KEY
 
 
 class SettingsDialog(QDialog):
@@ -34,6 +36,19 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(download_group)
 
+        playback_group = QGroupBox("Browser Playback")
+        playback_layout = QVBoxLayout(playback_group)
+        self.autoplay_checkbox = QCheckBox("Autoplay next video")
+        self.autoplay_checkbox.setToolTip(
+            "When off, the browser player stays on the video you opened. When on, "
+            "YouTube may continue to the next video when this one ends."
+        )
+        self.autoplay_checkbox.setChecked(
+            self.settings.value(AUTOPLAY_SETTING_KEY, False, type=bool)
+        )
+        playback_layout.addWidget(self.autoplay_checkbox)
+        layout.addWidget(playback_group)
+
         button_layout = QHBoxLayout()
         save_button = QPushButton("Save")
         save_button.clicked.connect(self.save_settings)
@@ -56,4 +71,5 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "Invalid Path", "The selected folder does not exist.")
             return
         self.settings.setValue("download_directory", path)
+        self.settings.setValue(AUTOPLAY_SETTING_KEY, self.autoplay_checkbox.isChecked())
         self.accept()

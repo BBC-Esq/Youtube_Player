@@ -12,6 +12,8 @@ FILTER_LISTS = {
 
 MAX_LIST_AGE_SECONDS = 7 * 24 * 60 * 60
 
+AUTOPLAY_SETTING_KEY = "browser_autoplay_next"
+
 PLAYER_PRUNE_SCRIPT = r"""
 (function () {
   var AD_KEYS = ["adPlacements", "playerAds", "adSlots", "adBreakHeartbeatParams",
@@ -52,28 +54,36 @@ PLAYER_PRUNE_SCRIPT = r"""
 })();
 """
 
-AUTOPLAY_OFF_SCRIPT = r"""
+AUTOPLAY_CONTROL_SCRIPT = r"""
 (function () {
-  function disable() {
+  window.__autoplayAllowed = false;
+  function apply() {
+    var want = !!window.__autoplayAllowed;
+    try {
+      var toggle = document.querySelector(".ytp-autonav-toggle-button");
+      if (toggle) {
+        var on = toggle.getAttribute("aria-checked") === "true";
+        if (on !== want) toggle.click();
+      }
+    } catch (e) {}
     try {
       var player = document.getElementById("movie_player");
       if (player && typeof player.setAutonavState === "function") {
-        player.setAutonavState(1);
-      }
-    } catch (e) {}
-    try {
-      var toggle = document.querySelector(".ytp-autonav-toggle-button");
-      if (toggle && toggle.getAttribute("aria-checked") === "true") {
-        toggle.click();
+        player.setAutonavState(want ? 2 : 1);
       }
     } catch (e) {}
   }
-  disable();
-  document.addEventListener("DOMContentLoaded", disable);
+  window.__setAutoplay = function (value) {
+    window.__autoplayAllowed = !!value;
+    apply();
+    return window.__autoplayAllowed;
+  };
+  apply();
+  document.addEventListener("DOMContentLoaded", apply);
   var ticks = 0;
   var timer = setInterval(function () {
-    disable();
-    if (++ticks > 40) clearInterval(timer);
+    apply();
+    if (++ticks > 60) clearInterval(timer);
   }, 1500);
 })();
 """
