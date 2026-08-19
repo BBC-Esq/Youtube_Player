@@ -52,6 +52,32 @@ PLAYER_PRUNE_SCRIPT = r"""
 })();
 """
 
+AUTOPLAY_OFF_SCRIPT = r"""
+(function () {
+  function disable() {
+    try {
+      var player = document.getElementById("movie_player");
+      if (player && typeof player.setAutonavState === "function") {
+        player.setAutonavState(1);
+      }
+    } catch (e) {}
+    try {
+      var toggle = document.querySelector(".ytp-autonav-toggle-button");
+      if (toggle && toggle.getAttribute("aria-checked") === "true") {
+        toggle.click();
+      }
+    } catch (e) {}
+  }
+  disable();
+  document.addEventListener("DOMContentLoaded", disable);
+  var ticks = 0;
+  var timer = setInterval(function () {
+    disable();
+    if (++ticks > 40) clearInterval(timer);
+  }, 1500);
+})();
+"""
+
 THEATER_SCRIPT = r"""
 (function () {
   var css = "#masthead-container,#secondary,#comments,#related,ytd-merch-shelf-renderer," +

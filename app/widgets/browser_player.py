@@ -5,7 +5,9 @@ from PySide6.QtWebEngineCore import (
     QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineUrlRequestInterceptor
 )
 
-from app.core.adblock import PLAYER_PRUNE_SCRIPT, THEATER_SCRIPT, build_engine
+from app.core.adblock import (
+    AUTOPLAY_OFF_SCRIPT, PLAYER_PRUNE_SCRIPT, THEATER_SCRIPT, build_engine
+)
 
 
 class AdBlockInterceptor(QWebEngineUrlRequestInterceptor):
@@ -28,6 +30,22 @@ class AdBlockInterceptor(QWebEngineUrlRequestInterceptor):
             info.block(True)
 
 
+class SingleVideoPage(QWebEnginePage):
+    def __init__(self, profile, video_id, parent=None):
+        super().__init__(profile, parent)
+        self._video_id = video_id
+        self.blocked_navigations = 0
+
+    def acceptNavigationRequest(self, url, nav_type, is_main_frame):
+        if not is_main_frame or not self._video_id:
+            return True
+        target = BrowserPlayer.video_id_of(url.toString())
+        if target and target != self._video_id:
+            self.blocked_navigations += 1
+            return False
+        return True
+
+
 class BrowserPlayer(QDialog):
     closed = Signal()
 
@@ -42,7 +60,7 @@ class BrowserPlayer(QDialog):
         self._interceptor = AdBlockInterceptor(self._engine, self)
         self._profile.setUrlRequestInterceptor(self._interceptor)
 
-        for source in (PLAYER_PRUNE_SCRIPT, THEATER_SCRIPT):
+        for source in (PLAYER_PRUNE_SCRIPT, THEATER_SCRIPT, AUTOPLAY_OFF_SCRIPT):
             script = QWebEngineScript()
             script.setSourceCode(source)
             script.setInjectionPoint(QWebEngineScript.DocumentCreation)
@@ -54,8 +72,10 @@ class BrowserPlayer(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        self.video_id = self.video_id_of(video_url)
         self.view = QWebEngineView(self)
-        self.view.setPage(QWebEnginePage(self._profile, self.view))
+        self.page = SingleVideoPage(self._profile, self.video_id, self.view)
+        self.view.setPage(self.page)
         layout.addWidget(self.view, stretch=1)
 
         bar = QHBoxLayout()
@@ -76,17 +96,19 @@ class BrowserPlayer(QDialog):
         self.view.load(QUrl(self.watch_url(video_url)))
 
     @staticmethod
-    def watch_url(video_url):
-        video_id = ""
+    def video_id_of(video_url):
         url = QUrl(video_url)
         host = url.host().lower()
         if "youtu.be" in host:
-            video_id = url.path().lstrip("/")
-        else:
-            for pair in url.query().split("&"):
-                if pair.startswith("v="):
-                    video_id = pair[2:]
-                    break
+            return url.path().lstrip("/")
+        for pair in url.query().split("&"):
+            if pair.startswith("v="):
+                return pair[2:]
+        return ""
+
+    @staticmethod
+    def watch_url(video_url):
+        video_id = BrowserPlayer.video_id_of(video_url)
         if not video_id:
             return video_url
         return f"https://www.youtube.com/watch?v={video_id}"
