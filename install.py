@@ -10,7 +10,7 @@ os.system("")
 libs_with_deps = [
     "pyside6==6.10.2",
     "av==17.0.0",
-    "pytubefix==10.5.0",
+    "pytubefix==10.11.0",
     "python-vlc==3.0.21203"
 ]
 
