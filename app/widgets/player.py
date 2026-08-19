@@ -288,6 +288,17 @@ class VideoPlayer(QWidget):
         self._poll_timer.start()
         self.playback_started.emit()
 
+    def is_playing_media(self):
+        if not self._media_player or not vlc:
+            return False
+        try:
+            state = self._media_player.get_state()
+            if state in (vlc.State.Playing, vlc.State.Paused):
+                return self._media_player.get_time() > 0
+        except Exception:
+            return False
+        return False
+
     def get_current_time_ms(self):
         if self._media_player:
             return self._media_player.get_time()

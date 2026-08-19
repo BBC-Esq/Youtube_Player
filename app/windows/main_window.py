@@ -22,6 +22,12 @@ from app.widgets import VideoPlayer, DownloadsPanel, Toast, SearchPanel, Browser
 from app.core import DownloadManager, DownloadJob
 
 
+PREVIEW_BLOCKED_MESSAGE = (
+    "Preview unavailable: YouTube is restricting this video's stream. "
+    "Use Watch in Browser to play it."
+)
+
+
 def _abr_value(stream):
     return int(stream.abr.replace("kbps", "")) if stream.abr else 0
 
@@ -126,6 +132,7 @@ class MainWindow(QMainWindow):
         self.player.fullscreen_toggled.connect(self._handle_fullscreen)
         self.player.error_occurred.connect(self._player_error)
         self.player.play_requested.connect(self.preview_video)
+        self.player.playback_stopped.connect(self._on_playback_stopped)
         self.right_layout.addWidget(self.player, stretch=1)
 
         self.playback_frame = QFrame()
@@ -288,6 +295,10 @@ class MainWindow(QMainWindow):
         self.toast = Toast(self)
 
         self._browser_player = None
+        self._preview_check_timer = QTimer()
+        self._preview_check_timer.setSingleShot(True)
+        self._preview_check_timer.setInterval(6000)
+        self._preview_check_timer.timeout.connect(self._verify_preview_started)
         self._filter_thread = FilterListThread()
         self._filter_thread.start()
         self._track_thread(self._filter_thread)
@@ -451,7 +462,7 @@ class MainWindow(QMainWindow):
             self.pb_update_button.setEnabled(False)
             self.status_label.setText("Starting audio preview...")
             self.player.play_stream(audio_stream.url, seek_ms=seek_ms)
-            self.status_label.setText("Playing audio preview.")
+            self._preview_check_timer.start()
             return
 
         if not self.video_streams:
@@ -476,7 +487,7 @@ class MainWindow(QMainWindow):
 
         self.status_label.setText("Starting preview...")
         self.player.play_stream(video_url, audio_url, seek_ms=seek_ms)
-        self.status_label.setText("Playing preview.")
+        self._preview_check_timer.start()
 
     def _on_pb_selection_changed(self):
         current_video_itag = self.pb_format_combo.currentData()
@@ -520,9 +531,23 @@ class MainWindow(QMainWindow):
                 self.setGeometry(self._pre_fullscreen_geometry)
             self.player.show_controls()
 
+    def _on_playback_stopped(self):
+        self._preview_check_timer.stop()
+
+    def _verify_preview_started(self):
+        if self.player.is_playing_media():
+            self.status_label.setText("Playing preview.")
+            return
+        self.status_label.setText(PREVIEW_BLOCKED_MESSAGE)
+        self.toast.show_message(
+            "Preview unavailable - use Watch in Browser", level="error", duration_ms=5000
+        )
+
     @Slot(str)
     def _player_error(self, msg):
+        self._preview_check_timer.stop()
         self.error_label.setText(f"Player: {msg}")
+        self.status_label.setText(PREVIEW_BLOCKED_MESSAGE)
 
     def _sorted_resolutions(self):
         resolutions = {}
