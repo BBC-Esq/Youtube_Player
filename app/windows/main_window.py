@@ -16,9 +16,9 @@ from app.constants import (
     VIDEO_CODEC_NAMES, VIDEO_CODEC_TOOLTIPS,
     AUDIO_CODEC_NAMES, AUDIO_CODEC_TOOLTIPS
 )
-from app.threads import FetchThread, CaptionDownloadThread, ThumbnailThread
+from app.threads import FetchThread, CaptionDownloadThread, ThumbnailThread, FilterListThread
 from app.dialogs import SettingsDialog
-from app.widgets import VideoPlayer, DownloadsPanel, Toast, SearchPanel
+from app.widgets import VideoPlayer, DownloadsPanel, Toast, SearchPanel, BrowserPlayer
 from app.core import DownloadManager, DownloadJob
 
 
@@ -247,6 +247,16 @@ class MainWindow(QMainWindow):
         self.right_layout.addWidget(self.options_group)
 
         download_row = QHBoxLayout()
+        self.watch_button = QPushButton("Watch in Browser")
+        self.watch_button.setEnabled(False)
+        self.watch_button.setMinimumHeight(40)
+        self.watch_button.setFixedWidth(160)
+        self.watch_button.setToolTip(
+            "Play this video in an ad-filtered browser view. Works even when a "
+            "video cannot be downloaded."
+        )
+        self.watch_button.clicked.connect(self.open_browser_player)
+        download_row.addWidget(self.watch_button)
         self.download_button = QPushButton("Add to Queue")
         self.download_button.setEnabled(False)
         self.download_button.setMinimumHeight(40)
@@ -277,11 +287,30 @@ class MainWindow(QMainWindow):
 
         self.toast = Toast(self)
 
+        self._browser_player = None
+        self._filter_thread = FilterListThread()
+        self._filter_thread.start()
+        self._track_thread(self._filter_thread)
+
         self.transcripts_list.itemSelectionChanged.connect(
             lambda: self.transcript_download_button.setEnabled(
                 bool(self.transcripts_list.selectedItems())
             )
         )
+
+    def open_browser_player(self):
+        url = self.url_entry.text().strip() or self.video_url
+        if not url:
+            return
+        if self._browser_player is not None:
+            self._browser_player.close()
+        self._browser_player = BrowserPlayer(url, self.video_title, self)
+        self._browser_player.closed.connect(self._on_browser_player_closed)
+        self.player.stop()
+        self._browser_player.show()
+
+    def _on_browser_player_closed(self):
+        self._browser_player = None
 
     def open_settings(self):
         dialog = SettingsDialog(self)
@@ -301,6 +330,7 @@ class MainWindow(QMainWindow):
 
     def on_url_text_changed(self, text):
         self.fetch_timer.stop()
+        self.watch_button.setEnabled(bool(text.strip()))
         if text.strip():
             self.fetch_timer.start()
 
@@ -308,6 +338,7 @@ class MainWindow(QMainWindow):
         self.url_entry.blockSignals(True)
         self.url_entry.setText(url)
         self.url_entry.blockSignals(False)
+        self.watch_button.setEnabled(bool(url.strip()))
         self.fetch_video_info()
 
     def fetch_video_info(self):

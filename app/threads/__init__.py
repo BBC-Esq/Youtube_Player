@@ -6,3 +6,4 @@ from app.threads.mux import MuxThread
 from app.threads.thumbnail import ThumbnailThread
 from app.threads.search import SearchThread, NextPageThread
 from app.threads.channel import ChannelThread, ChannelBatchThread
+from app.threads.filters import FilterListThread
