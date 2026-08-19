@@ -1,24 +1,30 @@
-import time
-
 from PySide6.QtCore import QThread, Signal
 
 from pytubefix import YouTube
 from pytubefix.exceptions import BotDetection
 
-BOT_RETRY_DELAY_SECONDS = 2.0
+FETCH_CLIENT_FALLBACKS = ("WEB", "MWEB")
 
 BOT_DETECTION_MESSAGE = (
-    "YouTube temporarily refused this request (bot detection). "
-    "This is a rate limit on YouTube's side, not a problem with the video. "
-    "Wait a moment and try again."
+    "YouTube refused this request on every client tried ({clients}). "
+    "Some videos are restricted to clients this app cannot use; others are a "
+    "temporary rate limit that clears on its own after a short wait."
 )
+
+
+def _default_client_name():
+    try:
+        from pytubefix.innertube import InnerTube
+        return InnerTube().client_name
+    except Exception:
+        return "default"
 
 
 class FetchThread(QThread):
     finished = Signal(list, list, list, str, str)
     error = Signal(str)
     client_switched = Signal(str, str)
-    retrying = Signal()
+    retrying = Signal(str)
 
     def __init__(self, url, use_oauth=False, oauth_verifier=None):
         super().__init__()
@@ -30,16 +36,10 @@ class FetchThread(QThread):
     def cancel(self):
         self._cancelled = True
 
-    def _wait_before_retry(self):
-        deadline = time.monotonic() + BOT_RETRY_DELAY_SECONDS
-        while time.monotonic() < deadline:
-            if self._cancelled:
-                return False
-            time.sleep(0.1)
-        return not self._cancelled
-
-    def _fetch(self):
+    def _fetch(self, client=None):
         yt_kwargs = {"use_oauth": self.use_oauth}
+        if client:
+            yt_kwargs["client"] = client
         if self.use_oauth:
             yt_kwargs["allow_oauth_cache"] = True
             if self.oauth_verifier is not None:
@@ -76,30 +76,38 @@ class FetchThread(QThread):
 
         return yt, original_client, streams_info, captions_info, streams_objects, thumbnail_url
 
+    def _fetch_with_fallbacks(self):
+        attempts = (None,) + FETCH_CLIENT_FALLBACKS
+        tried = []
+        for index, client in enumerate(attempts):
+            if self._cancelled:
+                return None
+            if index:
+                self.retrying.emit(client)
+            try:
+                return self._fetch(client)
+            except BotDetection:
+                tried.append(client or _default_client_name())
+                if index == len(attempts) - 1:
+                    if not self._cancelled:
+                        self.error.emit(
+                            BOT_DETECTION_MESSAGE.format(clients=", ".join(tried))
+                        )
+                    return None
+        return None
+
     def run(self):
         try:
-            try:
-                result = self._fetch()
-            except BotDetection:
-                if self._cancelled:
-                    return
-                self.retrying.emit()
-                if not self._wait_before_retry():
-                    return
-                result = self._fetch()
+            result = self._fetch_with_fallbacks()
+            if result is None or self._cancelled:
+                return
 
             yt, original_client, streams_info, captions_info, streams_objects, thumbnail_url = result
-
-            if self._cancelled:
-                return
 
             if yt.client != original_client:
                 self.client_switched.emit(original_client, yt.client)
 
             self.finished.emit(streams_info, captions_info, streams_objects, "Data fetched successfully.", thumbnail_url)
-        except BotDetection:
-            if not self._cancelled:
-                self.error.emit(BOT_DETECTION_MESSAGE)
         except Exception as e:
             if not self._cancelled:
                 self.error.emit(str(e))

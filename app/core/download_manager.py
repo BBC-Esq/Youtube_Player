@@ -10,6 +10,12 @@ from app.core.download_job import DownloadJob, JobStatus
 from app.threads import DownloadThread, MuxThread, ConversionThread, FetchThread
 
 
+SABR_MESSAGE = (
+    "YouTube is serving this video through its protected SABR streaming path, "
+    "which the installed pytubefix version cannot download."
+)
+
+
 def _sanitize_filename(title: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", title)
 
@@ -359,6 +365,9 @@ class DownloadManager(QObject):
         err_lower = error_message.lower()
         if "cancelled" in err_lower:
             self._finish_cancel(job)
+            return
+        if "sabr" in err_lower or "stream protection" in err_lower:
+            self._finish_fail(job, SABR_MESSAGE)
             return
         is_expired = (
             "403" in error_message
