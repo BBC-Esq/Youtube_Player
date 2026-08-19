@@ -26,6 +26,13 @@ def _abr_value(stream):
     return int(stream.abr.replace("kbps", "")) if stream.abr else 0
 
 
+def _filesize_mb(stream):
+    try:
+        return stream.filesize_mb
+    except Exception:
+        return None
+
+
 class MainWindow(QMainWindow):
     _oauth_dialog_requested = Signal(str, str)
 
@@ -512,7 +519,7 @@ class MainWindow(QMainWindow):
             return
 
         matching = [s for s in self.video_streams if s.resolution == resolution]
-        matching.sort(key=lambda s: s.filesize_mb if s.filesize_mb else 0)
+        matching.sort(key=lambda s: _filesize_mb(s) or 0)
 
         for s in matching:
             raw_codec = s.video_codec.split(".")[0] if s.video_codec else ""
@@ -528,7 +535,8 @@ class MainWindow(QMainWindow):
                 br_str = ""
             label = f"{s.subtype.upper()} ({codec_display}){fps_str}{br_str}"
             if include_size:
-                size = f"{s.filesize_mb:.1f} MB" if s.filesize_mb else "? MB"
+                mb = _filesize_mb(s)
+                size = f"{mb:.1f} MB" if mb else "? MB"
                 label = f"{label} - {size}"
             idx = combo.count()
             combo.addItem(label, userData=s.itag)
@@ -545,7 +553,8 @@ class MainWindow(QMainWindow):
             codec_display = AUDIO_CODEC_NAMES.get(raw_codec, raw_codec or s.subtype)
             bitrate = s.abr or "?"
             if include_size:
-                size = f"{s.filesize_mb:.1f} MB" if s.filesize_mb else "? MB"
+                mb = _filesize_mb(s)
+                size = f"{mb:.1f} MB" if mb else "? MB"
                 label = f"{bitrate} - {s.subtype.upper()} ({codec_display}) - {size}"
             else:
                 label = f"{bitrate} ({codec_display})"

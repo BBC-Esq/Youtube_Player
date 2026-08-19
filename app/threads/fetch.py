@@ -51,12 +51,16 @@ class FetchThread(QThread):
         streams_objects = []
 
         for stream in yt.streams:
+            try:
+                filesize_text = f"{stream.filesize_mb:.2f} MB"
+            except Exception:
+                filesize_text = "unknown"
             stream_info = (
                 f"Itag: {stream.itag} | Type: {stream.type.capitalize()} | "
                 f"Resolution: {getattr(stream, 'resolution', 'N/A')} | "
                 f"FPS: {getattr(stream, 'fps', 'N/A')} | "
                 f"Mime Type: {stream.mime_type} | "
-                f"Filesize: {stream.filesize_mb:.2f} MB | "
+                f"Filesize: {filesize_text} | "
                 f"Adaptive: {'Yes' if stream.is_adaptive else 'No'} | "
                 f"Progressive: {'Yes' if stream.is_progressive else 'No'} | "
                 f"Audio: {'Yes' if stream.includes_audio_track else 'No'} | "
