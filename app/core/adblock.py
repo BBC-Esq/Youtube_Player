@@ -2,8 +2,6 @@ import os
 import time
 import urllib.request
 
-from PySide6.QtCore import QStandardPaths
-
 FILTER_LISTS = {
     "ubo-filters.txt": "https://ublockorigin.github.io/uAssets/filters/filters.txt",
     "ubo-privacy.txt": "https://ublockorigin.github.io/uAssets/filters/privacy.txt",
@@ -112,9 +110,7 @@ THEATER_SCRIPT = r"""
 
 
 def filter_dir():
-    base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
-    if not base:
-        base = os.path.join(os.path.expanduser("~"), ".youtube_downloader")
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".cache")
     path = os.path.join(base, "YouTubeDownloader", "filters")
     os.makedirs(path, exist_ok=True)
     return path
