@@ -118,7 +118,7 @@ class DownloadsPanel(QGroupBox):
     def _refresh_count(self, jobs):
         active = sum(1 for j in jobs if j.status in (
             JobStatus.QUEUED, JobStatus.DOWNLOADING_VIDEO, JobStatus.DOWNLOADING_AUDIO,
-            JobStatus.MUXING, JobStatus.CONVERTING
+            JobStatus.MUXING, JobStatus.WAITING_TO_CONVERT, JobStatus.CONVERTING
         ))
         done = sum(1 for j in jobs if j.status == JobStatus.DONE)
         failed = sum(1 for j in jobs if j.status == JobStatus.FAILED)

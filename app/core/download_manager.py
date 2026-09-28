@@ -3,9 +3,10 @@ import re
 from collections import deque
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, QSettings, Signal, Slot
 
 from app.constants import AUDIO_FORMATS, CODEC_SAMPLE_FORMATS, detect_mux_container
+from app.core.cpu import configured_conversion_workers
 from app.core.download_job import DownloadJob, JobStatus
 from app.threads import DownloadThread, MuxThread, ConversionThread, FetchThread
 
@@ -32,11 +33,17 @@ class DownloadManager(QObject):
         self._queue: deque[str] = deque()
         self._running: set[str] = set()
         self._max_concurrent: int = 1
+        self._convert_queue: deque[str] = deque()
+        self._converting: set[str] = set()
+        self._settings = QSettings("YouTubeDownloader", "YouTubeDownloader")
         self._oauth_verifier = oauth_verifier
         self._tracked_threads: list = []
 
     def set_oauth_verifier(self, verifier):
         self._oauth_verifier = verifier
+
+    def apply_settings(self):
+        self._pump_conversions()
 
     def _track_thread(self, thread):
         self._tracked_threads.append(thread)
@@ -59,7 +66,8 @@ class DownloadManager(QObject):
         return list(self._jobs.values())
 
     def active_job_count(self) -> int:
-        return len(self._running) + len(self._queue)
+        return (len(self._running) + len(self._queue)
+                + len(self._converting) + len(self._convert_queue))
 
     def enqueue(self, job: DownloadJob) -> str:
         self._jobs[job.job_id] = job
@@ -77,6 +85,14 @@ class DownloadManager(QObject):
         if job_id in self._queue:
             try:
                 self._queue.remove(job_id)
+            except ValueError:
+                pass
+            job.status = JobStatus.CANCELLED
+            self.job_updated.emit(job_id)
+            return
+        if job_id in self._convert_queue:
+            try:
+                self._convert_queue.remove(job_id)
             except ValueError:
                 pass
             job.status = JobStatus.CANCELLED
@@ -125,6 +141,24 @@ class DownloadManager(QObject):
             self._running.add(job_id)
             self._start_job(job)
 
+    def _pump_conversions(self):
+        limit = configured_conversion_workers(self._settings)
+        while self._convert_queue and len(self._converting) < limit:
+            job_id = self._convert_queue.popleft()
+            job = self._jobs.get(job_id)
+            if not job or job.status == JobStatus.CANCELLED:
+                continue
+            self._converting.add(job_id)
+            self._start_conversion(job, job.downloaded_path)
+
+    def _pump_all(self):
+        self._pump_conversions()
+        self._pump()
+
+    def _release_slots(self, job_id: str):
+        self._running.discard(job_id)
+        self._converting.discard(job_id)
+
     def _update(self, job: DownloadJob):
         self.job_updated.emit(job.job_id)
 
@@ -132,28 +166,28 @@ class DownloadManager(QObject):
         job.status = JobStatus.DONE
         job.progress = 100
         job.current_thread = None
-        self._running.discard(job.job_id)
+        self._release_slots(job.job_id)
         self.job_updated.emit(job.job_id)
         self.job_finished.emit(job.job_id, final_path)
-        self._pump()
+        self._pump_all()
 
     def _finish_fail(self, job: DownloadJob, error: str):
         job.status = JobStatus.FAILED
         job.error = error
         job.current_thread = None
         job.cleanup_temp_files()
-        self._running.discard(job.job_id)
+        self._release_slots(job.job_id)
         self.job_updated.emit(job.job_id)
         self.job_failed.emit(job.job_id, error)
-        self._pump()
+        self._pump_all()
 
     def _finish_cancel(self, job: DownloadJob):
         job.status = JobStatus.CANCELLED
         job.current_thread = None
         job.cleanup_temp_files()
-        self._running.discard(job.job_id)
+        self._release_slots(job.job_id)
         self.job_updated.emit(job.job_id)
-        self._pump()
+        self._pump_all()
 
     def _start_job(self, job: DownloadJob):
         base_title = _sanitize_filename(job.title or "video")
@@ -300,9 +334,19 @@ class DownloadManager(QObject):
         if not job:
             return
         if job.convert_after and job.conversion_params:
-            self._start_conversion(job, file_path)
+            self._queue_conversion(job, file_path)
             return
         self._finish_ok(job, file_path)
+
+    def _queue_conversion(self, job: DownloadJob, file_path: str):
+        job.downloaded_path = file_path
+        job.current_thread = None
+        job.status = JobStatus.WAITING_TO_CONVERT
+        job.progress = 0
+        self._running.discard(job.job_id)
+        self._convert_queue.append(job.job_id)
+        self._update(job)
+        self._pump_all()
 
     def _start_conversion(self, job: DownloadJob, input_path: str):
         params = job.conversion_params or {}
@@ -375,7 +419,7 @@ class DownloadManager(QObject):
             or "expired" in err_lower
             or "signature" in err_lower
         )
-        if is_expired and not job.retry_attempted:
+        if is_expired and not job.retry_attempted and job.job_id in self._running:
             job.retry_attempted = True
             self._refetch_and_retry(job)
             return

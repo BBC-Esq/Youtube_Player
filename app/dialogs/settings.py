@@ -1,11 +1,15 @@
 import os
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QGroupBox,
-    QLineEdit, QPushButton, QFileDialog, QMessageBox, QCheckBox
+    QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
+    QLineEdit, QPushButton, QFileDialog, QMessageBox, QCheckBox, QSpinBox
 )
 from PySide6.QtCore import QSettings
 
 from app.core.adblock import AUTOPLAY_SETTING_KEY
+from app.core.cpu import (
+    CONVERSION_WORKERS_SETTING_KEY, RESERVED_PHYSICAL_CORES,
+    configured_conversion_workers, max_conversion_workers, physical_core_count
+)
 
 
 class SettingsDialog(QDialog):
@@ -49,6 +53,34 @@ class SettingsDialog(QDialog):
         playback_layout.addWidget(self.autoplay_checkbox)
         layout.addWidget(playback_group)
 
+        conversion_group = QGroupBox("Audio Conversion")
+        conversion_layout = QVBoxLayout(conversion_group)
+        limit = max_conversion_workers()
+        physical = physical_core_count()
+        spin_row = QHBoxLayout()
+        spin_row.addWidget(QLabel("Conversions at once:"))
+        self.conversion_spin = QSpinBox()
+        self.conversion_spin.setRange(1, limit)
+        self.conversion_spin.setValue(configured_conversion_workers(self.settings))
+        self.conversion_spin.setEnabled(limit > 1)
+        spin_row.addWidget(self.conversion_spin)
+        spin_row.addStretch()
+        conversion_layout.addLayout(spin_row)
+        if not physical:
+            detail = ("This computer's physical cores could not be detected, "
+                      "so conversions run one at a time.")
+        elif physical - RESERVED_PHYSICAL_CORES < 1:
+            detail = (f"This computer has {physical} physical cores, "
+                      "so conversions run one at a time.")
+        else:
+            detail = (f"Up to {limit} on this computer: {physical} physical cores, "
+                      f"{RESERVED_PHYSICAL_CORES} kept free. Downloads always run one at a time.")
+        detail_label = QLabel(detail)
+        detail_label.setWordWrap(True)
+        detail_label.setStyleSheet("font-size: 11px;")
+        conversion_layout.addWidget(detail_label)
+        layout.addWidget(conversion_group)
+
         button_layout = QHBoxLayout()
         save_button = QPushButton("Save")
         save_button.clicked.connect(self.save_settings)
@@ -72,4 +104,5 @@ class SettingsDialog(QDialog):
             return
         self.settings.setValue("download_directory", path)
         self.settings.setValue(AUTOPLAY_SETTING_KEY, self.autoplay_checkbox.isChecked())
+        self.settings.setValue(CONVERSION_WORKERS_SETTING_KEY, self.conversion_spin.value())
         self.accept()

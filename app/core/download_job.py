@@ -10,6 +10,7 @@ class JobStatus(Enum):
     DOWNLOADING_VIDEO = "Downloading video"
     DOWNLOADING_AUDIO = "Downloading audio"
     MUXING = "Muxing"
+    WAITING_TO_CONVERT = "Waiting to convert"
     CONVERTING = "Converting"
     DONE = "Done"
     FAILED = "Failed"
@@ -34,6 +35,7 @@ class DownloadJob:
     conversion_params: Optional[dict] = None
     temp_video_path: str = ""
     temp_audio_path: str = ""
+    downloaded_path: str = ""
     job_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     status: JobStatus = JobStatus.QUEUED
     progress: int = 0

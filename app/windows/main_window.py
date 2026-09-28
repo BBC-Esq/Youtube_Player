@@ -325,7 +325,8 @@ class MainWindow(QMainWindow):
 
     def open_settings(self):
         dialog = SettingsDialog(self)
-        dialog.exec()
+        if dialog.exec():
+            self.download_manager.apply_settings()
 
     def get_download_directory(self):
         download_dir = self.settings.value("download_directory", "")
