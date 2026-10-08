@@ -3,7 +3,7 @@ AUDIO_FORMATS = {
     "AAC": {"codec": "aac", "extension": "aac", "container": "adts", "lossy": True},
     "FLAC": {"codec": "flac", "extension": "flac", "container": "flac", "lossy": False},
     "WAV": {"codec": "pcm_s16le", "extension": "wav", "container": "wav", "lossy": False},
-    "OGG Vorbis": {"codec": "libvorbis", "extension": "ogg", "container": "ogg", "lossy": True},
+    "Opus": {"codec": "libopus", "extension": "opus", "container": "opus", "lossy": True, "sample_rate": 48000},
 }
 
 CODEC_SAMPLE_FORMATS = {
@@ -11,7 +11,7 @@ CODEC_SAMPLE_FORMATS = {
     "aac": "fltp",
     "flac": "s16",
     "pcm_s16le": "s16",
-    "libvorbis": "fltp",
+    "libopus": "flt",
 }
 
 BITRATE_OPTIONS = ["96", "128", "160", "192", "256", "320"]

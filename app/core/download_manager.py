@@ -353,7 +353,7 @@ class DownloadManager(QObject):
         fmt_name = params.get("format", "MP3")
         fmt_config = AUDIO_FORMATS.get(fmt_name, AUDIO_FORMATS["MP3"])
         bitrate = params.get("bitrate", 192000)
-        sample_rate = params.get("sample_rate", 44100)
+        sample_rate = fmt_config.get("sample_rate") or params.get("sample_rate", 44100)
         channels = params.get("channels", 2)
         mode = params.get("mode", "Convert and Keep Original")
 

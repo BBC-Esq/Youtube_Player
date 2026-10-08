@@ -223,6 +223,7 @@ class MainWindow(QMainWindow):
         self.conv_format_combo = QComboBox()
         self.conv_format_combo.addItems(list(AUDIO_FORMATS.keys()))
         self.conv_format_combo.currentTextChanged.connect(self._update_bitrate_state)
+        self.conv_format_combo.currentTextChanged.connect(self._update_sample_rate_state)
         conv_row1.addWidget(QLabel("Format:"))
         conv_row1.addWidget(self.conv_format_combo)
         self.conv_bitrate_combo = QComboBox()
@@ -237,6 +238,7 @@ class MainWindow(QMainWindow):
         self.conv_sample_rate_combo = QComboBox()
         self.conv_sample_rate_combo.addItems([f"{r} Hz" for r in SAMPLE_RATE_OPTIONS])
         self.conv_sample_rate_combo.setCurrentIndex(SAMPLE_RATE_OPTIONS.index("44100"))
+        self._chosen_sample_rate_index = None
         conv_row2.addWidget(QLabel("Sample Rate:"))
         conv_row2.addWidget(self.conv_sample_rate_combo)
         self.conv_channels_combo = QComboBox()
@@ -934,6 +936,7 @@ class MainWindow(QMainWindow):
         self.conv_channels_combo.setEnabled(enabled)
         if enabled:
             self._update_bitrate_state()
+            self._update_sample_rate_state()
 
     def _update_bitrate_state(self):
         if not self.conv_format_combo.isEnabled():
@@ -941,6 +944,21 @@ class MainWindow(QMainWindow):
         fmt = self.conv_format_combo.currentText()
         is_lossy = AUDIO_FORMATS.get(fmt, {}).get("lossy", True)
         self.conv_bitrate_combo.setEnabled(is_lossy)
+
+    def _update_sample_rate_state(self):
+        if not self.conv_format_combo.isEnabled():
+            return
+        fixed = AUDIO_FORMATS.get(self.conv_format_combo.currentText(), {}).get("sample_rate")
+        if fixed:
+            if self._chosen_sample_rate_index is None:
+                self._chosen_sample_rate_index = self.conv_sample_rate_combo.currentIndex()
+            self.conv_sample_rate_combo.setCurrentIndex(SAMPLE_RATE_OPTIONS.index(str(fixed)))
+            self.conv_sample_rate_combo.setEnabled(False)
+        else:
+            if self._chosen_sample_rate_index is not None:
+                self.conv_sample_rate_combo.setCurrentIndex(self._chosen_sample_rate_index)
+                self._chosen_sample_rate_index = None
+            self.conv_sample_rate_combo.setEnabled(True)
 
     def show_error(self, error):
         if self.sender() is not getattr(self, 'fetch_thread', None):
