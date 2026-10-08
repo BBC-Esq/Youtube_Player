@@ -40,12 +40,13 @@ class ConversionThread(QThread):
             else:
                 total_seconds = 0
 
+            layout = "stereo" if self.channels == 2 else "mono"
+
             out_stream = output_container.add_stream(self.codec, rate=self.sample_rate)
+            out_stream.layout = layout
 
             if self.bitrate and self.codec not in ("pcm_s16le", "flac"):
                 out_stream.bit_rate = self.bitrate
-
-            layout = "stereo" if self.channels == 2 else "mono"
 
             resampler = av.AudioResampler(
                 format=self.sample_format,
