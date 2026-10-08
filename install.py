@@ -9,7 +9,7 @@ os.system("")
 
 libs_with_deps = [
     "pyside6==6.12.0",
-    "av==19.0.1",
+    "av==19.0.1" if sys.version_info >= (3, 12) else "av==18.1.0",
     "pytubefix==11.2.0",
     "python-vlc==3.0.21203",
     "adblock==0.6.0"
@@ -48,7 +48,7 @@ def tkinter_message_box(title, message, type="info", yes_no=False):
 
 def check_python_version_and_confirm():
     major, minor = sys.version_info[:2]
-    if major == 3 and minor in [12, 13]:
+    if major == 3 and minor in [11, 12, 13, 14]:
         return tkinter_message_box(
             "Confirmation",
             f"Python version {sys.version.split()[0]} detected.\n\n"
@@ -58,7 +58,7 @@ def check_python_version_and_confirm():
     else:
         tkinter_message_box(
             "Python Version Error",
-            "This program requires Python 3.12 or 3.13.\n\nExiting...",
+            "This program requires Python 3.11 through 3.14.\n\nExiting...",
             type="error"
         )
         return False
