@@ -45,7 +45,7 @@ class MuxThread(QThread):
             for packet in video_input.demux(video_in_stream):
                 if self._cancelled:
                     raise RuntimeError("Muxing cancelled.")
-                if packet.dts is None:
+                if packet.size == 0:
                     continue
                 if total_seconds > 0 and packet.pts is not None:
                     current_seconds = float(packet.pts * time_base)
@@ -66,7 +66,7 @@ class MuxThread(QThread):
             for packet in audio_input.demux(audio_in_stream):
                 if self._cancelled:
                     raise RuntimeError("Muxing cancelled.")
-                if packet.dts is None:
+                if packet.size == 0:
                     continue
                 if audio_total_seconds > 0 and packet.pts is not None:
                     current_seconds = float(packet.pts * audio_time_base)
