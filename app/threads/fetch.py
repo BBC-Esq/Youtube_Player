@@ -3,13 +3,20 @@ from PySide6.QtCore import QThread, Signal
 from pytubefix import YouTube
 from pytubefix.exceptions import BotDetection
 
-FETCH_CLIENT_FALLBACKS = ("WEB", "MWEB")
+FETCH_CLIENT_FALLBACKS = ("MWEB", "WEB")
 
 BOT_DETECTION_MESSAGE = (
     "YouTube refused this request on every client tried ({clients}). "
     "Some videos are restricted to clients this app cannot use; others are a "
     "temporary rate limit that clears on its own after a short wait."
 )
+
+REFUSED_REASON = "YouTube refused the request"
+PROTECTED_REASON = "YouTube only offered protected streams"
+
+
+def _has_protected_streams(streams):
+    return any(stream.is_sabr and not stream.po_token for stream in streams)
 
 
 def _default_client_name():
@@ -83,21 +90,32 @@ class FetchThread(QThread):
     def _fetch_with_fallbacks(self):
         attempts = (None,) + FETCH_CLIENT_FALLBACKS
         tried = []
+        protected = None
+        reason = ""
         for index, client in enumerate(attempts):
             if self._cancelled:
                 return None
             if index:
-                self.retrying.emit(client)
+                self.retrying.emit(f"{reason}, trying the {client} client...")
             try:
-                return self._fetch(client)
+                result = self._fetch(client)
             except BotDetection:
                 tried.append(client or _default_client_name())
-                if index == len(attempts) - 1:
-                    if not self._cancelled:
-                        self.error.emit(
-                            BOT_DETECTION_MESSAGE.format(clients=", ".join(tried))
-                        )
-                    return None
+                reason = REFUSED_REASON
+                continue
+            except Exception:
+                if protected is None:
+                    raise
+                continue
+            if not _has_protected_streams(result[4]):
+                return result
+            if protected is None:
+                protected = result
+            reason = PROTECTED_REASON
+        if protected is not None:
+            return protected
+        if not self._cancelled:
+            self.error.emit(BOT_DETECTION_MESSAGE.format(clients=", ".join(tried)))
         return None
 
     def run(self):
