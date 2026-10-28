@@ -10,7 +10,7 @@ os.system("")
 libs_with_deps = [
     "pyside6==6.12.0",
     "av==19.0.1" if sys.version_info >= (3, 12) else "av==18.1.0",
-    "pytubefix==11.2.0",
+    "pytubefix==11.2.1",
     "python-vlc==3.0.21203",
     "adblock==0.6.0"
 ]
