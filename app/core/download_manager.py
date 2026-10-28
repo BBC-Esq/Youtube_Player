@@ -6,6 +6,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, QSettings, Signal, Slot
 
 from app.constants import AUDIO_FORMATS, CODEC_SAMPLE_FORMATS, detect_mux_container
+from app.core.audio_tracks import track_key
 from app.core.cpu import configured_conversion_workers
 from app.core.download_job import DownloadJob, JobStatus
 from app.threads import DownloadThread, MuxThread, ConversionThread, FetchThread
@@ -19,6 +20,13 @@ SABR_MESSAGE = (
 
 def _sanitize_filename(title: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", title)
+
+
+def _matching_audio(streams_objects, job):
+    candidates = [s for s in streams_objects
+                  if s.itag == job.audio_itag and track_key(s) == job.audio_track]
+    candidates.sort(key=lambda s: bool(s.is_drc))
+    return candidates[0] if candidates else None
 
 
 class DownloadManager(QObject):
@@ -446,14 +454,14 @@ class DownloadManager(QObject):
         if not job:
             return
         if job.audio_only:
-            match = next((s for s in streams_objects if s.itag == job.audio_itag), None)
+            match = _matching_audio(streams_objects, job)
             if match is None:
                 self._finish_fail(job, "Audio stream no longer available after re-fetch.")
                 return
             job.audio_stream = match
         else:
             v = next((s for s in streams_objects if s.itag == job.video_itag), None)
-            a = next((s for s in streams_objects if s.itag == job.audio_itag), None)
+            a = _matching_audio(streams_objects, job)
             if v is None or a is None:
                 self._finish_fail(job, "Stream no longer available after re-fetch.")
                 return

@@ -26,6 +26,7 @@ class DownloadJob:
     use_oauth: bool
     video_itag: Optional[int] = None
     audio_itag: Optional[int] = None
+    audio_track: str = ""
     video_stream: Any = None
     audio_stream: Any = None
     final_filename: str = ""

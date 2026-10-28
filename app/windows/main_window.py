@@ -20,6 +20,7 @@ from app.threads import FetchThread, CaptionDownloadThread, ThumbnailThread, Fil
 from app.dialogs import SettingsDialog
 from app.widgets import VideoPlayer, DownloadsPanel, Toast, SearchPanel, BrowserPlayer
 from app.core import DownloadManager, DownloadJob
+from app.core.audio_tracks import available_tracks, default_track, streams_for_track, track_key
 
 
 PREVIEW_BLOCKED_MESSAGE = (
@@ -151,6 +152,13 @@ class MainWindow(QMainWindow):
         playback_layout.addWidget(self.pb_fmt_label)
         playback_layout.addWidget(self.pb_format_combo)
 
+        self.pb_lang_label = QLabel("Language:")
+        self.pb_language_combo = QComboBox()
+        self.pb_lang_label.setVisible(False)
+        self.pb_language_combo.setVisible(False)
+        playback_layout.addWidget(self.pb_lang_label)
+        playback_layout.addWidget(self.pb_language_combo)
+
         self.pb_audio_label = QLabel("Audio:")
         self.pb_audio_combo = QComboBox()
         playback_layout.addWidget(self.pb_audio_label)
@@ -164,9 +172,12 @@ class MainWindow(QMainWindow):
 
         self._pb_active_video_itag = None
         self._pb_active_audio_itag = None
+        self._pb_active_audio_track = ""
 
+        self.pb_language_combo.currentIndexChanged.connect(self.populate_pb_audio_combo)
         self.pb_resolution_combo.currentIndexChanged.connect(self._on_pb_selection_changed)
         self.pb_format_combo.currentIndexChanged.connect(self._on_pb_selection_changed)
+        self.pb_language_combo.currentIndexChanged.connect(self._on_pb_selection_changed)
         self.pb_audio_combo.currentIndexChanged.connect(self._on_pb_selection_changed)
 
         playback_layout.addStretch()
@@ -196,6 +207,16 @@ class MainWindow(QMainWindow):
         fmt_layout.addWidget(self.fmt_label)
         fmt_layout.addWidget(self.video_format_combo)
         combos_layout.addLayout(fmt_layout)
+
+        lang_layout = QVBoxLayout()
+        self.audio_lang_label = QLabel("Audio Language:")
+        self.audio_language_combo = QComboBox()
+        self.audio_language_combo.currentIndexChanged.connect(self.populate_audio_quality_combo)
+        self.audio_lang_label.setVisible(False)
+        self.audio_language_combo.setVisible(False)
+        lang_layout.addWidget(self.audio_lang_label)
+        lang_layout.addWidget(self.audio_language_combo)
+        combos_layout.addLayout(lang_layout)
 
         audio_q_layout = QVBoxLayout()
         audio_q_layout.addWidget(QLabel("Audio Quality:"))
@@ -376,6 +397,13 @@ class MainWindow(QMainWindow):
         self.pb_resolution_combo.clear()
         self.pb_format_combo.clear()
         self.pb_audio_combo.clear()
+        for label, combo in ((self.pb_lang_label, self.pb_language_combo),
+                             (self.audio_lang_label, self.audio_language_combo)):
+            combo.blockSignals(True)
+            combo.clear()
+            combo.blockSignals(False)
+            label.setVisible(False)
+            combo.setVisible(False)
         self.transcripts_list.clear()
         self.download_button.setEnabled(False)
 
@@ -423,11 +451,13 @@ class MainWindow(QMainWindow):
             s for s in streams_objects
             if s.includes_video_track and s.is_adaptive
         ]
-        self.audio_streams = [
+        audio_streams = [
             s for s in streams_objects
             if s.type == "audio" and not s.is_progressive
         ]
+        self.audio_streams = [s for s in audio_streams if not s.is_drc] or audio_streams
 
+        self.populate_language_combos()
         self.populate_resolution_combo()
         self.populate_audio_quality_combo()
         self.populate_pb_resolution_combo()
@@ -455,13 +485,15 @@ class MainWindow(QMainWindow):
         self.player.set_thumbnail(pixmap)
 
     def preview_video(self, seek_ms=None):
+        track = self._pb_track()
         if self.audio_only_checkbox.isChecked():
             audio_itag = self.pb_audio_combo.currentData()
-            audio_stream = self.find_stream_by_itag(audio_itag) if audio_itag else None
+            audio_stream = self.find_audio_stream(audio_itag, track) if audio_itag else None
             if not audio_stream:
                 return
             self._pb_active_video_itag = None
             self._pb_active_audio_itag = audio_itag
+            self._pb_active_audio_track = track
             self.pb_update_button.setEnabled(False)
             self.status_label.setText("Starting audio preview...")
             self.player.play_stream(audio_stream.url, seek_ms=seek_ms)
@@ -477,15 +509,16 @@ class MainWindow(QMainWindow):
             return
 
         audio_itag = self.pb_audio_combo.currentData()
-        audio_stream = self.find_stream_by_itag(audio_itag) if audio_itag else None
+        audio_stream = self.find_audio_stream(audio_itag, track) if audio_itag else None
         if not audio_stream:
-            audio_stream = self.get_best_audio_for_video(video_stream)
+            audio_stream = self.get_best_audio_for_video(video_stream, track)
 
         video_url = video_stream.url
         audio_url = audio_stream.url if audio_stream else None
 
         self._pb_active_video_itag = video_itag
         self._pb_active_audio_itag = audio_itag if audio_itag else (audio_stream.itag if audio_stream else None)
+        self._pb_active_audio_track = track
         self.pb_update_button.setEnabled(False)
 
         self.status_label.setText("Starting preview...")
@@ -498,7 +531,8 @@ class MainWindow(QMainWindow):
         has_active = self._pb_active_video_itag is not None or self._pb_active_audio_itag is not None
         changed = (
             current_video_itag != self._pb_active_video_itag or
-            current_audio_itag != self._pb_active_audio_itag
+            current_audio_itag != self._pb_active_audio_itag or
+            self._pb_track() != self._pb_active_audio_track
         )
         self.pb_update_button.setEnabled(changed and has_active)
 
@@ -604,10 +638,10 @@ class MainWindow(QMainWindow):
                 if tooltip:
                     combo.setItemData(idx, tooltip, Qt.ToolTipRole)
 
-    def _fill_audio_combo(self, combo, include_size, with_tooltips):
+    def _fill_audio_combo(self, combo, include_size, with_tooltips, track):
         combo.clear()
 
-        for s in sorted(self.audio_streams, key=_abr_value, reverse=True):
+        for s in sorted(streams_for_track(self.audio_streams, track), key=_abr_value, reverse=True):
             raw_codec = s.audio_codec.split(".")[0] if s.audio_codec else ""
             codec_display = AUDIO_CODEC_NAMES.get(raw_codec, raw_codec or s.subtype)
             bitrate = s.abr or "?"
@@ -650,8 +684,30 @@ class MainWindow(QMainWindow):
         else:
             self.audio_quality_combo.setToolTip("")
 
+    def populate_language_combos(self):
+        tracks = available_tracks(self.audio_streams)
+        preferred = default_track(self.audio_streams)
+        show = len(tracks) > 1
+        for label, combo in ((self.pb_lang_label, self.pb_language_combo),
+                             (self.audio_lang_label, self.audio_language_combo)):
+            combo.blockSignals(True)
+            combo.clear()
+            for key, text in tracks:
+                combo.addItem(text, userData=key)
+            combo.setCurrentIndex(max(combo.findData(preferred), 0))
+            combo.blockSignals(False)
+            label.setVisible(show)
+            combo.setVisible(show)
+
+    def _pb_track(self):
+        return self.pb_language_combo.currentData() or ""
+
+    def _download_track(self):
+        return self.audio_language_combo.currentData() or ""
+
     def populate_audio_quality_combo(self):
-        self._fill_audio_combo(self.audio_quality_combo, include_size=True, with_tooltips=True)
+        self._fill_audio_combo(self.audio_quality_combo, include_size=True, with_tooltips=True,
+                               track=self._download_track())
         self.update_audio_tooltip(self.audio_quality_combo.currentIndex())
 
     def populate_pb_resolution_combo(self):
@@ -664,7 +720,8 @@ class MainWindow(QMainWindow):
         )
 
     def populate_pb_audio_combo(self):
-        self._fill_audio_combo(self.pb_audio_combo, include_size=False, with_tooltips=False)
+        self._fill_audio_combo(self.pb_audio_combo, include_size=False, with_tooltips=False,
+                               track=self._pb_track())
 
     def toggle_audio_only(self, checked):
         self.res_label.setVisible(not checked)
@@ -683,12 +740,20 @@ class MainWindow(QMainWindow):
     def find_stream_by_itag(self, itag):
         return next((s for s in self.streams_objects if s.itag == itag), None)
 
-    def get_best_audio_for_video(self, video_stream):
+    def find_audio_stream(self, itag, track):
+        return next((s for s in self.audio_streams if s.itag == itag and track_key(s) == track), None)
+
+    def _track_suffix(self, audio_stream):
+        key = track_key(audio_stream)
+        return f"_{self.sanitize_filename(key)}" if key else ""
+
+    def get_best_audio_for_video(self, video_stream, track):
         v_subtype = video_stream.subtype.lower()
+        track_streams = streams_for_track(self.audio_streams, track)
 
         preferred = []
         fallback = []
-        for a in self.audio_streams:
+        for a in track_streams:
             a_sub = a.subtype.lower()
             if v_subtype == "mp4" and a_sub == "mp4":
                 preferred.append(a)
@@ -738,13 +803,13 @@ class MainWindow(QMainWindow):
             if audio_itag is None:
                 self.error_label.setText("No audio stream selected.")
                 return
-            audio_stream = self.find_stream_by_itag(audio_itag)
+            audio_stream = self.find_audio_stream(audio_itag, self._download_track())
             if not audio_stream:
                 self.error_label.setText("Could not find selected audio stream.")
                 return
 
             bitrate = audio_stream.abr or "unknown"
-            filename = f"{base_title}_Audio_{bitrate}.{audio_stream.subtype}"
+            filename = f"{base_title}_Audio_{bitrate}{self._track_suffix(audio_stream)}.{audio_stream.subtype}"
             if len(filename) > 200:
                 ext = f".{audio_stream.subtype}"
                 filename = f"{filename[:200 - len(ext)]}{ext}"
@@ -767,6 +832,7 @@ class MainWindow(QMainWindow):
                 audio_only=True,
                 use_oauth=self.use_oauth.isChecked(),
                 audio_itag=audio_itag,
+                audio_track=track_key(audio_stream),
                 audio_stream=audio_stream,
                 final_filename=filename,
                 final_output_path=final_path,
@@ -782,7 +848,7 @@ class MainWindow(QMainWindow):
             if not video_stream:
                 self.error_label.setText("Could not find selected video stream.")
                 return
-            audio_stream = self.get_best_audio_for_video(video_stream)
+            audio_stream = self.get_best_audio_for_video(video_stream, self._download_track())
             if not audio_stream:
                 self.error_label.setText("No compatible audio stream found.")
                 return
@@ -791,7 +857,7 @@ class MainWindow(QMainWindow):
             container_fmt, container_ext = detect_mux_container(
                 video_stream.video_codec, audio_stream.audio_codec
             )
-            final_filename = f"{base_title}_{res}{container_ext}"
+            final_filename = f"{base_title}_{res}{self._track_suffix(audio_stream)}{container_ext}"
             if len(final_filename) > 200:
                 final_filename = f"{final_filename[:200 - len(container_ext)]}{container_ext}"
             final_path = os.path.join(download_dir, final_filename)
@@ -813,6 +879,7 @@ class MainWindow(QMainWindow):
                 use_oauth=self.use_oauth.isChecked(),
                 video_itag=video_itag,
                 audio_itag=audio_stream.itag,
+                audio_track=track_key(audio_stream),
                 video_stream=video_stream,
                 audio_stream=audio_stream,
                 final_filename=final_filename,
