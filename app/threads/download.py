@@ -1,3 +1,5 @@
+import os
+
 from PySide6.QtCore import QThread, Signal
 
 
@@ -19,9 +21,17 @@ class DownloadThread(QThread):
         self.max_retries = max_retries
         self.interrupt_checker = interrupt_checker
         self._cancelled = False
+        self._partial_path = None
 
     def cancel(self):
         self._cancelled = True
+
+    def _remove_partial(self):
+        if self._partial_path and os.path.exists(self._partial_path):
+            try:
+                os.remove(self._partial_path)
+            except OSError:
+                pass
 
     def _check_interrupt(self, *args, **kwargs):
         if self.interrupt_checker is not None:
@@ -45,6 +55,13 @@ class DownloadThread(QThread):
     def run(self):
         original_callback = getattr(self.stream._monostate, 'on_progress', None)
         try:
+            path = self.stream.get_file_path(
+                filename=self.filename,
+                output_path=self.output_path,
+                filename_prefix=self.filename_prefix,
+            )
+            if not (self.skip_existing and os.path.exists(path)):
+                self._partial_path = path
             self.stream._monostate.on_progress = self._on_progress
             downloaded_file = self.stream.download(
                 output_path=self.output_path,
@@ -56,14 +73,17 @@ class DownloadThread(QThread):
                 interrupt_checker=self._check_interrupt
             )
             if self._cancelled:
+                self._remove_partial()
                 self.error.emit("Download cancelled.")
                 return
             if downloaded_file:
                 self.progress.emit(100)
                 self.completed.emit(downloaded_file)
             else:
+                self._remove_partial()
                 self.error.emit("Download was skipped or failed.")
         except Exception as e:
+            self._remove_partial()
             if self._cancelled:
                 self.error.emit("Download cancelled.")
             else:
