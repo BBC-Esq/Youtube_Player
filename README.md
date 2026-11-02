@@ -1,6 +1,6 @@
 <div align="center">
 
-<img width="1152" height="627" alt="image" src="https://github.com/user-attachments/assets/f71cbb4e-72ad-4d64-9db0-350515450950" />
+<img width="1152" height="768" alt="One does not simply watch a YouTube video without watching 5-10 ads first" src="assets/readme.png" />
 
 ### Requires [VLC Media Player](https://www.videolan.org/vlc/)
 
