@@ -24,6 +24,8 @@ from app.core.audio_tracks import available_tracks, default_track, streams_for_t
 from app.core.stream_relay import StreamRelay
 
 
+PREVIEW_MAX_HEIGHT = 1080
+
 PREVIEW_BLOCKED_MESSAGE = (
     "Preview unavailable: YouTube is restricting this video's stream. "
     "Use Watch in Browser to play it."
@@ -32,6 +34,18 @@ PREVIEW_BLOCKED_MESSAGE = (
 
 def _abr_value(stream):
     return int(stream.abr.replace("kbps", "")) if stream.abr else 0
+
+
+def _resolution_height(resolution):
+    digits = re.match(r"\d+", resolution or "")
+    return int(digits.group()) if digits else 0
+
+
+def _preferred_preview_resolution(resolutions):
+    within_cap = [r for r in resolutions if _resolution_height(r) <= PREVIEW_MAX_HEIGHT]
+    if within_cap:
+        return max(within_cap, key=_resolution_height)
+    return min(resolutions, key=_resolution_height) if resolutions else None
 
 
 def _filesize_mb(stream):
@@ -598,12 +612,14 @@ class MainWindow(QMainWindow):
                 resolutions[res] = (res_num, fps)
         return sorted(resolutions.keys(), key=lambda r: resolutions[r], reverse=True)
 
-    def _fill_resolution_combo(self, combo, on_changed):
+    def _fill_resolution_combo(self, combo, on_changed, preferred=None):
         combo.blockSignals(True)
         combo.clear()
         sorted_res = self._sorted_resolutions()
         for res in sorted_res:
             combo.addItem(res)
+        if preferred in sorted_res:
+            combo.setCurrentIndex(sorted_res.index(preferred))
         combo.blockSignals(False)
         if sorted_res:
             on_changed()
@@ -713,7 +729,10 @@ class MainWindow(QMainWindow):
         self.update_audio_tooltip(self.audio_quality_combo.currentIndex())
 
     def populate_pb_resolution_combo(self):
-        self._fill_resolution_combo(self.pb_resolution_combo, self.on_pb_resolution_changed)
+        self._fill_resolution_combo(
+            self.pb_resolution_combo, self.on_pb_resolution_changed,
+            preferred=_preferred_preview_resolution(self._sorted_resolutions()),
+        )
 
     def on_pb_resolution_changed(self):
         self._fill_format_combo(
