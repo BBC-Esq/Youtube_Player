@@ -21,6 +21,7 @@ from app.dialogs import SettingsDialog
 from app.widgets import VideoPlayer, DownloadsPanel, Toast, SearchPanel, BrowserPlayer
 from app.core import DownloadManager, DownloadJob
 from app.core.audio_tracks import available_tracks, default_track, streams_for_track, track_key
+from app.core.stream_relay import StreamRelay
 
 
 PREVIEW_BLOCKED_MESSAGE = (
@@ -65,6 +66,7 @@ class MainWindow(QMainWindow):
         self._oauth_lock = threading.Lock()
         self._oauth_dialog_requested.connect(self._display_oauth_dialog)
 
+        self.stream_relay = StreamRelay()
         self.download_manager = DownloadManager(self, oauth_verifier=self._oauth_verifier)
         self.download_manager.job_added.connect(self._on_job_added)
         self.download_manager.job_updated.connect(self._on_job_updated)
@@ -496,7 +498,8 @@ class MainWindow(QMainWindow):
             self._pb_active_audio_track = track
             self.pb_update_button.setEnabled(False)
             self.status_label.setText("Starting audio preview...")
-            self.player.play_stream(audio_stream.url, seek_ms=seek_ms)
+            audio_url, = self.stream_relay.local_urls(audio_stream)
+            self.player.play_stream(audio_url, seek_ms=seek_ms)
             self._preview_check_timer.start()
             return
 
@@ -513,8 +516,7 @@ class MainWindow(QMainWindow):
         if not audio_stream:
             audio_stream = self.get_best_audio_for_video(video_stream, track)
 
-        video_url = video_stream.url
-        audio_url = audio_stream.url if audio_stream else None
+        video_url, audio_url = self.stream_relay.local_urls(video_stream, audio_stream)
 
         self._pb_active_video_itag = video_itag
         self._pb_active_audio_itag = audio_itag if audio_itag else (audio_stream.itag if audio_stream else None)
@@ -1070,6 +1072,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("splitter_sizes", self.splitter.sizes())
         self._oauth_event.set()
         self.player.release()
+        self.stream_relay.close()
         self.download_manager.cancel_all()
         self.download_manager.wait_for_all(3000)
         for t in self._active_threads:
