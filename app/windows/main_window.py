@@ -538,7 +538,7 @@ class MainWindow(QMainWindow):
         self.pb_update_button.setEnabled(False)
 
         self.status_label.setText("Starting preview...")
-        self.player.play_stream(video_url, audio_url, seek_ms=seek_ms)
+        self.player.play_stream(video_url, audio_url, seek_ms=seek_ms, container=video_stream.subtype)
         self._preview_check_timer.start()
 
     def _on_pb_selection_changed(self):

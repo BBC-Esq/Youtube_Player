@@ -99,6 +99,7 @@ class VideoPlayer(QWidget):
         self._event_handler = None
         self._current_video_url = None
         self._current_audio_url = None
+        self._current_container = None
         self._thumbnail_pixmap = None
         self._controls_visible = True
         self._hide_timer = QTimer()
@@ -263,19 +264,22 @@ class VideoPlayer(QWidget):
     def _hide_thumbnail(self):
         self.thumbnail_label.hide()
 
-    def play_stream(self, video_url, audio_url=None, seek_ms=None):
+    def play_stream(self, video_url, audio_url=None, seek_ms=None, container=None):
         if not VLC_AVAILABLE or not self._media_player:
             self.error_occurred.emit("VLC is not available.")
             return
 
         self._current_video_url = video_url
         self._current_audio_url = audio_url
+        self._current_container = container
         self._pending_seek_ms = seek_ms
 
         media = self._vlc_instance.media_new(video_url)
         media.add_option(":network-caching=1500")
         if audio_url:
             media.add_option(f":input-slave={audio_url}")
+            if container == "webm":
+                media.add_option(":demux=avformat,any")
         if seek_ms and seek_ms > 0:
             media.add_option(f":start-time={seek_ms / 1000:.1f}")
 
@@ -319,7 +323,8 @@ class VideoPlayer(QWidget):
                 return
             state = self._media_player.get_state()
             if vlc and state in (vlc.State.Ended, vlc.State.Stopped, vlc.State.NothingSpecial):
-                self.play_stream(self._current_video_url, self._current_audio_url)
+                self.play_stream(self._current_video_url, self._current_audio_url,
+                                 container=self._current_container)
                 return
             self._media_player.play()
             self._is_playing = True
@@ -333,6 +338,7 @@ class VideoPlayer(QWidget):
         self._is_playing = False
         self._current_video_url = None
         self._current_audio_url = None
+        self._current_container = None
         self.play_button.setText("Play")
         self._poll_timer.stop()
         self.position_slider.setValue(0)
