@@ -24,7 +24,7 @@ from app.core.audio_tracks import available_tracks, default_track, streams_for_t
 from app.core.stream_relay import StreamRelay
 
 
-PREVIEW_MAX_HEIGHT = 1080
+DEFAULT_MAX_HEIGHT = 1080
 
 PREVIEW_BLOCKED_MESSAGE = (
     "Preview unavailable: YouTube is restricting this video's stream. "
@@ -41,8 +41,8 @@ def _resolution_height(resolution):
     return int(digits.group()) if digits else 0
 
 
-def _preferred_preview_resolution(resolutions):
-    within_cap = [r for r in resolutions if _resolution_height(r) <= PREVIEW_MAX_HEIGHT]
+def _default_resolution(resolutions):
+    within_cap = [r for r in resolutions if _resolution_height(r) <= DEFAULT_MAX_HEIGHT]
     if within_cap:
         return max(within_cap, key=_resolution_height)
     return min(resolutions, key=_resolution_height) if resolutions else None
@@ -677,7 +677,10 @@ class MainWindow(QMainWindow):
                     combo.setItemData(idx, tooltip, Qt.ToolTipRole)
 
     def populate_resolution_combo(self):
-        self._fill_resolution_combo(self.resolution_combo, self.on_resolution_changed)
+        self._fill_resolution_combo(
+            self.resolution_combo, self.on_resolution_changed,
+            preferred=_default_resolution(self._sorted_resolutions()),
+        )
 
     def on_resolution_changed(self):
         resolution = self.resolution_combo.currentText()
@@ -731,7 +734,7 @@ class MainWindow(QMainWindow):
     def populate_pb_resolution_combo(self):
         self._fill_resolution_combo(
             self.pb_resolution_combo, self.on_pb_resolution_changed,
-            preferred=_preferred_preview_resolution(self._sorted_resolutions()),
+            preferred=_default_resolution(self._sorted_resolutions()),
         )
 
     def on_pb_resolution_changed(self):
