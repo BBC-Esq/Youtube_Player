@@ -108,7 +108,8 @@ class _RelayHandler(BaseHTTPRequestHandler):
 
     def _relay_live(self, hls_url, max_height, audio_only):
         try:
-            source = av.open(hls_url, options={"user_agent": UPSTREAM_HEADERS["User-Agent"]},
+            source = av.open(hls_url, options={"user_agent": UPSTREAM_HEADERS["User-Agent"],
+                                               "headers": "Accept-Encoding: gzip\r\n"},
                              timeout=UPSTREAM_TIMEOUT)
         except (OSError, av.FFmpegError):
             self.send_error(502)
