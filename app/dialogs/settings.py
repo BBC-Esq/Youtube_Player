@@ -1,11 +1,15 @@
 import os
+import sys
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
-    QLineEdit, QPushButton, QFileDialog, QMessageBox, QCheckBox, QSpinBox
+    QLineEdit, QPushButton, QFileDialog, QMessageBox, QCheckBox, QSpinBox, QComboBox
 )
 
 from app.core.adblock import AUTOPLAY_SETTING_KEY
 from app.core.app_settings import app_settings
+from app.core.audio_devices import (
+    AUDIO_DEVICE_SETTING_KEY, AUDIO_DEVICE_NAME_SETTING_KEY, output_devices
+)
 from app.core.cpu import (
     CONVERSION_WORKERS_SETTING_KEY, RESERVED_PHYSICAL_CORES,
     configured_conversion_workers, max_conversion_workers, physical_core_count
@@ -53,6 +57,10 @@ class SettingsDialog(QDialog):
         playback_layout.addWidget(self.autoplay_checkbox)
         layout.addWidget(playback_group)
 
+        self.device_combo = None
+        if sys.platform == "win32":
+            layout.addWidget(self._build_sound_group())
+
         conversion_group = QGroupBox("Audio Conversion")
         conversion_layout = QVBoxLayout(conversion_group)
         limit = max_conversion_workers()
@@ -92,6 +100,39 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(button_layout)
 
+    def _build_sound_group(self):
+        group = QGroupBox("Sound Output")
+        group_layout = QVBoxLayout(group)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Play sound through:"))
+        self.device_combo = QComboBox()
+        self.device_combo.addItem("Windows default device", "")
+        self._device_names = {"": ""}
+        for device_id, name in output_devices():
+            self.device_combo.addItem(name, device_id)
+            self._device_names[device_id] = name
+        saved_id = self.settings.value(AUDIO_DEVICE_SETTING_KEY, "", type=str)
+        if saved_id:
+            index = self.device_combo.findData(saved_id)
+            if index < 0:
+                saved_name = (self.settings.value(AUDIO_DEVICE_NAME_SETTING_KEY, "", type=str)
+                              or "Chosen device")
+                self.device_combo.addItem(f"{saved_name} (not connected)", saved_id)
+                self._device_names[saved_id] = saved_name
+                index = self.device_combo.count() - 1
+            self.device_combo.setCurrentIndex(index)
+        row.addWidget(self.device_combo, stretch=1)
+        group_layout.addLayout(row)
+        note = QLabel(
+            "The player's sound goes to this device without changing the Windows default. "
+            "While the device is unplugged, the Windows default is used instead. "
+            "Watch in Browser always uses the Windows default."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("font-size: 11px;")
+        group_layout.addWidget(note)
+        return group
+
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Download Folder")
         if folder:
@@ -105,4 +146,8 @@ class SettingsDialog(QDialog):
         self.settings.setValue("download_directory", path)
         self.settings.setValue(AUTOPLAY_SETTING_KEY, self.autoplay_checkbox.isChecked())
         self.settings.setValue(CONVERSION_WORKERS_SETTING_KEY, self.conversion_spin.value())
+        if self.device_combo is not None:
+            device_id = self.device_combo.currentData() or ""
+            self.settings.setValue(AUDIO_DEVICE_SETTING_KEY, device_id)
+            self.settings.setValue(AUDIO_DEVICE_NAME_SETTING_KEY, self._device_names.get(device_id, ""))
         self.accept()

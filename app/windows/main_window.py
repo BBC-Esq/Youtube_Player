@@ -21,6 +21,7 @@ from app.dialogs import SettingsDialog
 from app.widgets import VideoPlayer, DownloadsPanel, Toast, SearchPanel, BrowserPlayer
 from app.core import DownloadManager, DownloadJob
 from app.core.app_settings import app_settings
+from app.core.audio_devices import AUDIO_DEVICE_SETTING_KEY
 from app.core.audio_tracks import available_tracks, default_track, streams_for_track, track_key
 from app.core.bookmarks import Bookmarks
 from app.core.stream_relay import StreamRelay
@@ -191,6 +192,7 @@ class MainWindow(QMainWindow):
         self.right_layout.addWidget(self.title_label)
 
         self.player = VideoPlayer()
+        self.player.set_audio_device(self.settings.value(AUDIO_DEVICE_SETTING_KEY, "", type=str))
         self.player.fullscreen_toggled.connect(self._handle_fullscreen)
         self.player.error_occurred.connect(self._player_error)
         self.player.play_requested.connect(self.preview_video)
@@ -415,6 +417,7 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self)
         if dialog.exec():
             self.download_manager.apply_settings()
+            self.player.set_audio_device(self.settings.value(AUDIO_DEVICE_SETTING_KEY, "", type=str))
 
     def _populate_bookmarks_menu(self):
         self.bookmarks_menu.clear()

@@ -8,6 +8,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint
 from PySide6.QtGui import QPixmap, QKeyEvent, QMouseEvent, QWheelEvent, QCursor
 
+from app.core.audio_devices import connected_device
+
 VLC_AVAILABLE = False
 vlc = None
 try:
@@ -102,6 +104,7 @@ class VideoPlayer(QWidget):
         self._current_container = None
         self._live = False
         self._sound_only = False
+        self._audio_device = ""
         self._thumbnail_pixmap = None
         self._hide_timer = QTimer()
         self._hide_timer.setSingleShot(True)
@@ -223,7 +226,10 @@ class VideoPlayer(QWidget):
             return
 
         try:
-            self._vlc_instance = vlc.Instance("--quiet", "--no-xlib")
+            options = ["--quiet", "--no-xlib"]
+            if sys.platform == "win32":
+                options.append("--aout=directsound")
+            self._vlc_instance = vlc.Instance(*options)
             self._media_player = self._vlc_instance.media_player_new()
 
             if sys.platform == "win32":
@@ -312,8 +318,19 @@ class VideoPlayer(QWidget):
         self.time_label.setText("LIVE")
         self._start(media)
 
+    def set_audio_device(self, device_id):
+        self._audio_device = device_id or ""
+        if self._media_player:
+            self._apply_audio_device()
+
+    def _apply_audio_device(self):
+        device = connected_device(self._audio_device)
+        self._media_player.audio_output_device_set("directx", device)
+        self._media_player.audio_output_device_set(None, device)
+
     def _start(self, media):
         self._media_player.set_media(media)
+        self._apply_audio_device()
         self._media_player.play()
 
         if self._sound_only:
