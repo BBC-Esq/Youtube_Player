@@ -1,9 +1,19 @@
+import re
+import urllib.request
+
 from PySide6.QtCore import QThread, Signal
 
 from pytubefix import YouTube
-from pytubefix.exceptions import BotDetection
+from pytubefix.exceptions import BotDetection, LiveStreamError
 
 FETCH_CLIENT_FALLBACKS = ("MWEB", "WEB")
+
+LIVE_CLIENT = "ANDROID_VR"
+
+LIVE_UNAVAILABLE_MESSAGE = (
+    "YouTube did not offer a playable stream for this live broadcast. "
+    "Use Watch in Browser to watch it."
+)
 
 BOT_DETECTION_MESSAGE = (
     "YouTube refused this request on every client tried ({clients}). "
@@ -19,6 +29,26 @@ def _has_protected_streams(streams):
     return any(stream.is_sabr and not stream.po_token for stream in streams)
 
 
+def _live_resolutions(hls_url):
+    request = urllib.request.Request(hls_url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(request, timeout=15) as response:
+        playlist = response.read().decode("utf-8", "replace")
+    fps_by_height = {}
+    for line in playlist.splitlines():
+        if not line.startswith("#EXT-X-STREAM-INF:"):
+            continue
+        height = re.search(r"RESOLUTION=\d+x(\d+)", line)
+        fps = re.search(r"FRAME-RATE=([\d.]+)", line)
+        if height:
+            height = int(height.group(1))
+            fps = round(float(fps.group(1))) if fps else 30
+            fps_by_height[height] = max(fps_by_height.get(height, 0), fps)
+    return [
+        f"{height}p{fps if fps > 30 else ''}"
+        for height, fps in sorted(fps_by_height.items(), reverse=True)
+    ]
+
+
 def _default_client_name():
     try:
         from pytubefix.innertube import InnerTube
@@ -29,6 +59,7 @@ def _default_client_name():
 
 class FetchThread(QThread):
     finished = Signal(list, list, list, str, str)
+    live_found = Signal(str, str, list, str)
     error = Signal(str)
     client_switched = Signal(str, str)
     retrying = Signal(str)
@@ -87,6 +118,16 @@ class FetchThread(QThread):
 
         return yt, original_client, streams_info, captions_info, streams_objects, thumbnail_url
 
+    def _fetch_live(self):
+        yt = YouTube(self.url, client=LIVE_CLIENT)
+        hls_url = yt.vid_info.get("streamingData", {}).get("hlsManifestUrl")
+        if not hls_url:
+            self.error.emit(LIVE_UNAVAILABLE_MESSAGE)
+            return
+        resolutions = _live_resolutions(hls_url)
+        if not self._cancelled:
+            self.live_found.emit(yt.title, hls_url, resolutions, yt.thumbnail_url or "")
+
     def _fetch_with_fallbacks(self):
         attempts = (None,) + FETCH_CLIENT_FALLBACKS
         tried = []
@@ -103,6 +144,10 @@ class FetchThread(QThread):
                 tried.append(client or _default_client_name())
                 reason = REFUSED_REASON
                 continue
+            except LiveStreamError:
+                if not self._cancelled:
+                    self._fetch_live()
+                return None
             except Exception:
                 if protected is None:
                     raise

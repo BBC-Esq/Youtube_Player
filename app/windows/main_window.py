@@ -31,6 +31,8 @@ PREVIEW_BLOCKED_MESSAGE = (
     "Use Watch in Browser to play it."
 )
 
+LIVE_STREAM_MESSAGE = "Live stream: it can be watched but not downloaded."
+
 
 def _abr_value(stream):
     return int(stream.abr.replace("kbps", "")) if stream.abr else 0
@@ -73,6 +75,7 @@ class MainWindow(QMainWindow):
         self.captions_data = []
         self.video_url = ""
         self.video_title = ""
+        self.live_hls_url = None
         self._pre_fullscreen_geometry = None
         self._fullscreen_hidden_widgets = []
         self._active_threads = []
@@ -189,6 +192,7 @@ class MainWindow(QMainWindow):
         self._pb_active_video_itag = None
         self._pb_active_audio_itag = None
         self._pb_active_audio_track = ""
+        self._pb_active_live_resolution = None
 
         self.pb_language_combo.currentIndexChanged.connect(self.populate_pb_audio_combo)
         self.pb_resolution_combo.currentIndexChanged.connect(self._on_pb_selection_changed)
@@ -404,6 +408,10 @@ class MainWindow(QMainWindow):
                 previous_fetch.cancel()
 
         self.video_url = url
+        self.live_hls_url = None
+        self._pb_active_live_resolution = None
+        self.pb_format_combo.setEnabled(True)
+        self.pb_audio_combo.setEnabled(True)
         self.status_label.setText("Fetching data...")
         self.error_label.clear()
         self.title_label.clear()
@@ -429,6 +437,7 @@ class MainWindow(QMainWindow):
         self.fetch_thread = FetchThread(url, use_oauth=self.use_oauth.isChecked(),
                                         oauth_verifier=self._oauth_verifier)
         self.fetch_thread.finished.connect(self.update_info)
+        self.fetch_thread.live_found.connect(self.show_live_stream)
         self.fetch_thread.error.connect(self.show_error)
         self.fetch_thread.client_switched.connect(self.show_client_switch)
         self.fetch_thread.retrying.connect(self.show_fetch_retrying)
@@ -487,7 +496,37 @@ class MainWindow(QMainWindow):
 
         self.status_label.setText(status)
         self.error_label.clear()
+        self._load_thumbnail(thumbnail_url)
 
+    @Slot(str, str, list, str)
+    def show_live_stream(self, title, hls_url, resolutions, thumbnail_url):
+        if self.sender() is not getattr(self, 'fetch_thread', None):
+            return
+        self.live_hls_url = hls_url
+        self.streams_objects = []
+        self.video_streams = []
+        self.audio_streams = []
+        self.captions_data = []
+        self.url_entry.setEnabled(True)
+
+        self.video_title = title
+        self.title_label.setText(title)
+        self.setWindowTitle(f"YouTube Downloader - {title}")
+
+        self.pb_resolution_combo.blockSignals(True)
+        self.pb_resolution_combo.addItems(resolutions)
+        preferred = _default_resolution(resolutions)
+        if preferred:
+            self.pb_resolution_combo.setCurrentText(preferred)
+        self.pb_resolution_combo.blockSignals(False)
+        self.pb_format_combo.setEnabled(False)
+        self.pb_audio_combo.setEnabled(False)
+
+        self.status_label.setText(LIVE_STREAM_MESSAGE)
+        self.error_label.clear()
+        self._load_thumbnail(thumbnail_url)
+
+    def _load_thumbnail(self, thumbnail_url):
         if thumbnail_url:
             self.thumbnail_thread = ThumbnailThread(thumbnail_url)
             self.thumbnail_thread.finished.connect(self._on_thumbnail_loaded)
@@ -501,6 +540,16 @@ class MainWindow(QMainWindow):
         self.player.set_thumbnail(pixmap)
 
     def preview_video(self, seek_ms=None):
+        if self.live_hls_url:
+            resolution = self.pb_resolution_combo.currentText()
+            self._pb_active_live_resolution = resolution
+            self.pb_update_button.setEnabled(False)
+            self.status_label.setText("Starting live stream...")
+            self.player.play_live(self.live_hls_url, _resolution_height(resolution),
+                                  audio_only=self.audio_only_checkbox.isChecked())
+            self._preview_check_timer.start()
+            return
+
         track = self._pb_track()
         if self.audio_only_checkbox.isChecked():
             audio_itag = self.pb_audio_combo.currentData()
@@ -542,6 +591,12 @@ class MainWindow(QMainWindow):
         self._preview_check_timer.start()
 
     def _on_pb_selection_changed(self):
+        if self.live_hls_url:
+            active = self._pb_active_live_resolution
+            self.pb_update_button.setEnabled(
+                active is not None and self.pb_resolution_combo.currentText() != active
+            )
+            return
         current_video_itag = self.pb_format_combo.currentData()
         current_audio_itag = self.pb_audio_combo.currentData()
         has_active = self._pb_active_video_itag is not None or self._pb_active_audio_itag is not None
