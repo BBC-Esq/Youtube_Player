@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QSlider, QFrame, QStyle, QStyleOptionSlider, QSizePolicy
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint
-from PySide6.QtGui import QPixmap, QKeyEvent, QMouseEvent, QWheelEvent
+from PySide6.QtGui import QPixmap, QKeyEvent, QMouseEvent, QWheelEvent, QCursor
 
 VLC_AVAILABLE = False
 vlc = None
@@ -102,11 +102,14 @@ class VideoPlayer(QWidget):
         self._current_container = None
         self._live = False
         self._thumbnail_pixmap = None
-        self._controls_visible = True
         self._hide_timer = QTimer()
         self._hide_timer.setSingleShot(True)
         self._hide_timer.setInterval(3000)
         self._hide_timer.timeout.connect(self._auto_hide_controls)
+        self._last_cursor_pos = None
+        self._cursor_timer = QTimer()
+        self._cursor_timer.setInterval(200)
+        self._cursor_timer.timeout.connect(self._check_cursor)
 
         self._build_ui()
         self._init_vlc()
@@ -430,16 +433,28 @@ class VideoPlayer(QWidget):
         self._is_fullscreen = not self._is_fullscreen
         self.fullscreen_toggled.emit(self._is_fullscreen)
         if self._is_fullscreen:
+            self._last_cursor_pos = QCursor.pos()
+            self._cursor_timer.start()
             self._hide_timer.start()
+        else:
+            self._cursor_timer.stop()
+
+    def _check_cursor(self):
+        pos = QCursor.pos()
+        if pos != self._last_cursor_pos:
+            self._last_cursor_pos = pos
+            self.show_controls()
 
     def _auto_hide_controls(self):
-        if self._is_fullscreen and self._is_playing:
-            self.controls_widget.hide()
-            self._controls_visible = False
+        if not (self._is_fullscreen and self._is_playing):
+            return
+        if self.controls_widget.rect().contains(self.controls_widget.mapFromGlobal(QCursor.pos())):
+            self._hide_timer.start()
+            return
+        self.controls_widget.hide()
 
     def show_controls(self):
         self.controls_widget.show()
-        self._controls_visible = True
         if self._is_fullscreen:
             self._hide_timer.start()
 
@@ -484,11 +499,6 @@ class VideoPlayer(QWidget):
             self.volume_slider.setValue(min(self.volume_slider.value() + 5, 100))
         elif delta < 0:
             self.volume_slider.setValue(max(self.volume_slider.value() - 5, 0))
-
-    def mouseMoveEvent(self, event: QMouseEvent):
-        if self._is_fullscreen and not self._controls_visible:
-            self.show_controls()
-        super().mouseMoveEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
