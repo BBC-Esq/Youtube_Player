@@ -158,8 +158,18 @@ class MainWindow(QMainWindow):
         url_layout.addWidget(self.url_entry)
         self.right_layout.addWidget(url_frame)
 
+        checkbox_row = QWidget()
+        checkbox_layout = QHBoxLayout(checkbox_row)
+        checkbox_layout.setContentsMargins(0, 0, 0, 0)
         self.use_oauth = QCheckBox("Use OAuth (required for some age-restricted videos)")
-        self.right_layout.addWidget(self.use_oauth)
+        checkbox_layout.addWidget(self.use_oauth)
+        self.live_audio_only = QCheckBox("Audio only for live streams")
+        self.live_audio_only.setToolTip("Play live streams as sound only, which uses far less data.")
+        self.live_audio_only.setChecked(self.settings.value("live_audio_only", False, type=bool))
+        self.live_audio_only.toggled.connect(self._on_live_audio_only_toggled)
+        checkbox_layout.addWidget(self.live_audio_only)
+        checkbox_layout.addStretch()
+        self.right_layout.addWidget(checkbox_row)
 
         self.error_label = QLabel()
         self.error_label.setStyleSheet("color: red;")
@@ -227,6 +237,7 @@ class MainWindow(QMainWindow):
         self._pb_active_audio_itag = None
         self._pb_active_audio_track = ""
         self._pb_active_live_resolution = None
+        self._pb_active_live_sound_only = None
 
         self.pb_language_combo.currentIndexChanged.connect(self.populate_pb_audio_combo)
         self.pb_resolution_combo.currentIndexChanged.connect(self._on_pb_selection_changed)
@@ -478,6 +489,8 @@ class MainWindow(QMainWindow):
         self.video_url = url
         self.live_hls_url = None
         self._pb_active_live_resolution = None
+        self._pb_active_live_sound_only = None
+        self._update_pb_video_controls()
         self.pb_format_combo.setEnabled(True)
         self.pb_audio_combo.setEnabled(True)
         self.status_label.setText("Fetching data...")
@@ -592,6 +605,7 @@ class MainWindow(QMainWindow):
         self.pb_resolution_combo.blockSignals(False)
         self.pb_format_combo.setEnabled(False)
         self.pb_audio_combo.setEnabled(False)
+        self._update_pb_video_controls()
 
         self.status_label.setText(LIVE_STREAM_MESSAGE)
         self.error_label.clear()
@@ -613,12 +627,16 @@ class MainWindow(QMainWindow):
     def preview_video(self, seek_ms=None):
         if self.live_hls_url:
             resolution = self.pb_resolution_combo.currentText()
+            sound_only = self._live_sound_only()
             self._pb_active_live_resolution = resolution
+            self._pb_active_live_sound_only = sound_only
             self.pb_update_button.setEnabled(False)
-            self.status_label.setText("Starting live stream...")
+            self.status_label.setText(
+                "Starting live stream (sound only)..." if sound_only else "Starting live stream..."
+            )
             live_url = self.stream_relay.live_url(self.live_hls_url, _resolution_height(resolution),
-                                                  audio_only=self.audio_only_checkbox.isChecked())
-            self.player.play_live(live_url)
+                                                  audio_only=sound_only)
+            self.player.play_live(live_url, sound_only=sound_only)
             self._preview_check_timer.start()
             return
 
@@ -634,7 +652,7 @@ class MainWindow(QMainWindow):
             self.pb_update_button.setEnabled(False)
             self.status_label.setText("Starting audio preview...")
             audio_url, = self.stream_relay.local_urls(audio_stream)
-            self.player.play_stream(audio_url, seek_ms=seek_ms)
+            self.player.play_stream(audio_url, seek_ms=seek_ms, sound_only=True)
             self._preview_check_timer.start()
             return
 
@@ -879,11 +897,34 @@ class MainWindow(QMainWindow):
         self.resolution_combo.setVisible(not checked)
         self.fmt_label.setVisible(not checked)
         self.video_format_combo.setVisible(not checked)
-        self.pb_res_label.setVisible(not checked)
-        self.pb_resolution_combo.setVisible(not checked)
-        self.pb_fmt_label.setVisible(not checked)
-        self.pb_format_combo.setVisible(not checked)
         self.conversion_group.setVisible(checked)
+        self._update_pb_video_controls()
+        self._restart_live_if_mode_changed()
+
+    def _live_sound_only(self):
+        return self.live_audio_only.isChecked() or self.audio_only_checkbox.isChecked()
+
+    def _update_pb_video_controls(self):
+        visible = not (self.audio_only_checkbox.isChecked()
+                       or (self.live_hls_url and self.live_audio_only.isChecked()))
+        for widget in (self.pb_res_label, self.pb_resolution_combo,
+                       self.pb_fmt_label, self.pb_format_combo):
+            widget.setVisible(visible)
+
+    def _on_live_audio_only_toggled(self, checked):
+        self.settings.setValue("live_audio_only", checked)
+        self._update_pb_video_controls()
+        self._restart_live_if_mode_changed()
+
+    def _restart_live_if_mode_changed(self):
+        if not self.live_hls_url or not self.player.is_live():
+            return
+        if self._live_sound_only() == self._pb_active_live_sound_only:
+            return
+        if self.player.is_playing():
+            self.apply_playback_settings()
+        else:
+            self.player.stop()
 
     def sanitize_filename(self, title):
         return re.sub(r'[\\/*?:"<>|]', "", title)

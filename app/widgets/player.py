@@ -101,6 +101,7 @@ class VideoPlayer(QWidget):
         self._current_audio_url = None
         self._current_container = None
         self._live = False
+        self._sound_only = False
         self._thumbnail_pixmap = None
         self._hide_timer = QTimer()
         self._hide_timer.setSingleShot(True)
@@ -252,7 +253,7 @@ class VideoPlayer(QWidget):
 
     def set_thumbnail(self, pixmap):
         self._thumbnail_pixmap = pixmap
-        if not self._is_playing:
+        if not self._is_playing or self._sound_only:
             self._show_thumbnail()
 
     def _show_thumbnail(self):
@@ -268,7 +269,7 @@ class VideoPlayer(QWidget):
     def _hide_thumbnail(self):
         self.thumbnail_label.hide()
 
-    def play_stream(self, video_url, audio_url=None, seek_ms=None, container=None):
+    def play_stream(self, video_url, audio_url=None, seek_ms=None, container=None, sound_only=False):
         if not VLC_AVAILABLE or not self._media_player:
             self.error_occurred.emit("VLC is not available.")
             return
@@ -277,6 +278,7 @@ class VideoPlayer(QWidget):
         self._current_audio_url = audio_url
         self._current_container = container
         self._live = False
+        self._sound_only = sound_only
         self._pending_seek_ms = seek_ms
 
         media = self._vlc_instance.media_new(video_url)
@@ -291,7 +293,7 @@ class VideoPlayer(QWidget):
         self.position_slider.setEnabled(True)
         self._start(media)
 
-    def play_live(self, url):
+    def play_live(self, url, sound_only=False):
         if not VLC_AVAILABLE or not self._media_player:
             self.error_occurred.emit("VLC is not available.")
             return
@@ -300,6 +302,7 @@ class VideoPlayer(QWidget):
         self._current_audio_url = None
         self._current_container = None
         self._live = True
+        self._sound_only = sound_only
 
         media = self._vlc_instance.media_new(url)
         media.add_option(":network-caching=1500")
@@ -313,7 +316,10 @@ class VideoPlayer(QWidget):
         self._media_player.set_media(media)
         self._media_player.play()
 
-        self._hide_thumbnail()
+        if self._sound_only:
+            self._show_thumbnail()
+        else:
+            self._hide_thumbnail()
         self._is_playing = True
         self.play_button.setText("Pause")
         self._poll_timer.start()
@@ -329,6 +335,12 @@ class VideoPlayer(QWidget):
         except Exception:
             return False
         return False
+
+    def is_live(self):
+        return self._live
+
+    def is_playing(self):
+        return self._is_playing
 
     def get_current_time_ms(self):
         if self._media_player:
@@ -351,10 +363,10 @@ class VideoPlayer(QWidget):
             state = self._media_player.get_state()
             if vlc and state in (vlc.State.Ended, vlc.State.Stopped, vlc.State.NothingSpecial):
                 if self._live:
-                    self.play_live(self._current_video_url)
+                    self.play_live(self._current_video_url, sound_only=self._sound_only)
                 else:
                     self.play_stream(self._current_video_url, self._current_audio_url,
-                                     container=self._current_container)
+                                     container=self._current_container, sound_only=self._sound_only)
                 return
             self._media_player.play()
             self._is_playing = True
@@ -515,7 +527,7 @@ class VideoPlayer(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self._thumbnail_pixmap and not self._is_playing:
+        if self._thumbnail_pixmap and (not self._is_playing or self._sound_only):
             self._show_thumbnail()
         self.overlay_label.setGeometry(self.video_frame.rect())
 
