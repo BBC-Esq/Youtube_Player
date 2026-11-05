@@ -61,6 +61,7 @@ class FetchThread(QThread):
     finished = Signal(list, list, list, str, str)
     live_found = Signal(str, str, list, str)
     error = Signal(str)
+    blocked = Signal()
     client_switched = Signal(str, str)
     retrying = Signal(str)
 
@@ -161,6 +162,7 @@ class FetchThread(QThread):
             return protected
         if not self._cancelled:
             self.error.emit(BOT_DETECTION_MESSAGE.format(clients=", ".join(tried)))
+            self.blocked.emit()
         return None
 
     def run(self):

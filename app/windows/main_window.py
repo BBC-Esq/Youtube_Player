@@ -34,6 +34,16 @@ PREVIEW_BLOCKED_MESSAGE = (
 
 LIVE_STREAM_MESSAGE = "Live stream: it can be watched but not downloaded."
 
+BLOCKED_HELP_MESSAGE = (
+    "What this means: YouTube has temporarily stopped answering requests from your internet "
+    "connection, which it does when it sees a lot of activity in a short time. Nothing is wrong "
+    "with this video or with the program. The block lifts on its own, usually within a few "
+    "minutes to a couple of hours, and retrying over and over can make it last longer. Until "
+    "then, the video should still play on youtube.com in your regular web browser, or in this "
+    "program on a different network such as a phone hotspot. This program's Watch in Browser "
+    "button is affected by the block too."
+)
+
 
 def _abr_value(stream):
     return int(stream.abr.replace("kbps", "")) if stream.abr else 0
@@ -152,7 +162,16 @@ class MainWindow(QMainWindow):
 
         self.error_label = QLabel()
         self.error_label.setStyleSheet("color: red;")
+        self.error_label.setWordWrap(True)
         self.right_layout.addWidget(self.error_label)
+
+        self.blocked_help_label = QLabel(BLOCKED_HELP_MESSAGE)
+        self.blocked_help_label.setWordWrap(True)
+        self.blocked_help_label.setStyleSheet(
+            "padding: 6px; border: 1px solid palette(mid); border-radius: 4px;"
+        )
+        self.blocked_help_label.hide()
+        self.right_layout.addWidget(self.blocked_help_label)
 
         self.title_label = QLabel()
         self.title_label.setAlignment(Qt.AlignCenter)
@@ -462,6 +481,7 @@ class MainWindow(QMainWindow):
         self.pb_audio_combo.setEnabled(True)
         self.status_label.setText("Fetching data...")
         self.error_label.clear()
+        self.blocked_help_label.hide()
         self.title_label.clear()
         self.video_title = ""
         self.resolution_combo.clear()
@@ -488,6 +508,7 @@ class MainWindow(QMainWindow):
         self.fetch_thread.finished.connect(self.update_info)
         self.fetch_thread.live_found.connect(self.show_live_stream)
         self.fetch_thread.error.connect(self.show_error)
+        self.fetch_thread.blocked.connect(self.show_blocked_help)
         self.fetch_thread.client_switched.connect(self.show_client_switch)
         self.fetch_thread.retrying.connect(self.show_fetch_retrying)
         self.fetch_thread.start()
@@ -1162,6 +1183,12 @@ class MainWindow(QMainWindow):
         self.error_label.setText(f"Error: {error}")
         self.status_label.setText("Failed to fetch data.")
         self.url_entry.setEnabled(True)
+
+    @Slot()
+    def show_blocked_help(self):
+        if self.sender() is not getattr(self, 'fetch_thread', None):
+            return
+        self.blocked_help_label.show()
 
     def _track_thread(self, thread):
         self._active_threads = [t for t in self._active_threads if not t.isFinished()]
