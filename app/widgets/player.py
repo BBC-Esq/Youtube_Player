@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QTimer, Signal, QObject, QPoint
 from PySide6.QtGui import QPixmap, QKeyEvent, QMouseEvent, QWheelEvent, QCursor
 
 from app.core.audio_devices import connected_device
+from app.core.headset_link import HeadsetLink, find_headset_dongle
 
 VLC_AVAILABLE = False
 vlc = None
@@ -105,6 +106,7 @@ class VideoPlayer(QWidget):
         self._live = False
         self._sound_only = False
         self._audio_device = ""
+        self._headset_link = None
         self._thumbnail_pixmap = None
         self._hide_timer = QTimer()
         self._hide_timer.setSingleShot(True)
@@ -325,8 +327,38 @@ class VideoPlayer(QWidget):
 
     def _apply_audio_device(self):
         device = connected_device(self._audio_device)
+        self._update_headset_link(device)
+        if device and self._headset_link and self._headset_link.headset_on is False:
+            device = ""
         self._media_player.audio_output_device_set("directx", device)
         self._media_player.audio_output_device_set(None, device)
+
+    def _update_headset_link(self, device):
+        link = self._headset_link
+        if link and link.device_id == device and link.is_alive():
+            if link.headset_on is None:
+                link.ask()
+            return
+        self._close_headset_link()
+        path = find_headset_dongle(device)
+        if not path:
+            return
+        link = HeadsetLink(path, device)
+        link.state_changed.connect(self._on_headset_changed)
+        if link.start():
+            self._headset_link = link
+        else:
+            link.state_changed.disconnect(self._on_headset_changed)
+
+    def _close_headset_link(self):
+        link, self._headset_link = self._headset_link, None
+        if link:
+            link.state_changed.disconnect(self._on_headset_changed)
+            link.close()
+
+    def _on_headset_changed(self):
+        if self._media_player:
+            self._apply_audio_device()
 
     def _start(self, media):
         self._media_player.set_media(media)
@@ -550,6 +582,7 @@ class VideoPlayer(QWidget):
 
     def release(self):
         self._poll_timer.stop()
+        self._close_headset_link()
         if self._media_player:
             self._media_player.stop()
             self._media_player.release()

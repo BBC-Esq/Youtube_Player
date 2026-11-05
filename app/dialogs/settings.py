@@ -125,7 +125,8 @@ class SettingsDialog(QDialog):
         group_layout.addLayout(row)
         note = QLabel(
             "The player's sound goes to this device without changing the Windows default. "
-            "While the device is unplugged, the Windows default is used instead. "
+            "While the device is unplugged, or a Razer Barracuda Pro headset on its 2.4 GHz "
+            "dongle is switched off, the Windows default is used instead. "
             "Watch in Browser always uses the Windows default."
         )
         note.setWordWrap(True)
