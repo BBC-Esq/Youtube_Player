@@ -4,6 +4,9 @@ import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import av
+from av.stream import Discard
+
 CHUNK_SIZE = 4 * 1024 * 1024
 BLOCK_SIZE = 64 * 1024
 UPSTREAM_HEADERS = {"User-Agent": "Mozilla/5.0", "accept-language": "en-US,en"}
@@ -16,12 +19,31 @@ def _open_upstream(url, first, last):
     return urllib.request.urlopen(request, timeout=UPSTREAM_TIMEOUT)
 
 
+def _pick_live_streams(container, max_height, audio_only):
+    audio = max(container.streams.audio, key=lambda s: s.codec_context.bit_rate or 0, default=None)
+    if audio_only:
+        return [audio] if audio else []
+    videos = list(container.streams.video)
+    fitting = [s for s in videos if not max_height or s.codec_context.height <= max_height] or videos
+    video = max(
+        fitting,
+        key=lambda s: (s.codec_context.height, int(s.metadata.get("variant_bitrate", 0))),
+        default=None,
+    )
+    return [s for s in (video, audio) if s is not None]
+
+
 class _RelayHandler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
     def do_GET(self):
-        entry = self.server.streams.get(self.path.lstrip("/"))
+        key = self.path.lstrip("/")
+        live = self.server.live.get(key)
+        if live is not None:
+            self._relay_live(*live)
+            return
+        entry = self.server.streams.get(key)
         if entry is None:
             self.send_error(404)
             return
@@ -84,6 +106,37 @@ class _RelayHandler(BaseHTTPRequestHandler):
                     failures = 0
             upstream = None
 
+    def _relay_live(self, hls_url, max_height, audio_only):
+        try:
+            source = av.open(hls_url, options={"user_agent": UPSTREAM_HEADERS["User-Agent"]},
+                             timeout=UPSTREAM_TIMEOUT)
+        except (OSError, av.FFmpegError):
+            self.send_error(502)
+            return
+        with source:
+            selected = _pick_live_streams(source, max_height, audio_only)
+            if not selected:
+                self.send_error(502)
+                return
+            selected_indexes = {s.index for s in selected}
+            for stream in source.streams:
+                if stream.index not in selected_indexes:
+                    stream.discard = Discard.all
+
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp2t")
+            self.end_headers()
+            try:
+                with av.open(self.wfile, mode="w", format="mpegts") as output:
+                    outputs = {s.index: output.add_stream_from_template(s, opaque=True) for s in selected}
+                    for packet in source.demux(*selected):
+                        if packet.dts is None:
+                            continue
+                        packet.stream = outputs[packet.stream.index]
+                        output.mux(packet)
+            except (OSError, av.FFmpegError):
+                pass
+
 
 class StreamRelay:
     def __init__(self):
@@ -96,6 +149,7 @@ class StreamRelay:
                 server = ThreadingHTTPServer(("127.0.0.1", 0), _RelayHandler)
                 server.daemon_threads = True
                 server.streams = {}
+                server.live = {}
                 threading.Thread(target=server.serve_forever, daemon=True).start()
                 self._server = server
         return self._server
@@ -121,6 +175,12 @@ class StreamRelay:
             urls.append(f"http://127.0.0.1:{port}/{token}")
         server.streams = entries
         return urls
+
+    def live_url(self, hls_url, max_height=None, audio_only=False):
+        server = self._ensure_started()
+        token = secrets.token_hex(8)
+        server.live = {token: (hls_url, max_height, audio_only)}
+        return f"http://127.0.0.1:{server.server_address[1]}/{token}"
 
     def close(self):
         with self._lock:

@@ -545,8 +545,9 @@ class MainWindow(QMainWindow):
             self._pb_active_live_resolution = resolution
             self.pb_update_button.setEnabled(False)
             self.status_label.setText("Starting live stream...")
-            self.player.play_live(self.live_hls_url, _resolution_height(resolution),
-                                  audio_only=self.audio_only_checkbox.isChecked())
+            live_url = self.stream_relay.live_url(self.live_hls_url, _resolution_height(resolution),
+                                                  audio_only=self.audio_only_checkbox.isChecked())
+            self.player.play_live(live_url)
             self._preview_check_timer.start()
             return
 

@@ -100,7 +100,7 @@ class VideoPlayer(QWidget):
         self._current_video_url = None
         self._current_audio_url = None
         self._current_container = None
-        self._live_options = None
+        self._live = False
         self._thumbnail_pixmap = None
         self._controls_visible = True
         self._hide_timer = QTimer()
@@ -273,7 +273,7 @@ class VideoPlayer(QWidget):
         self._current_video_url = video_url
         self._current_audio_url = audio_url
         self._current_container = container
-        self._live_options = None
+        self._live = False
         self._pending_seek_ms = seek_ms
 
         media = self._vlc_instance.media_new(video_url)
@@ -288,7 +288,7 @@ class VideoPlayer(QWidget):
         self.position_slider.setEnabled(True)
         self._start(media)
 
-    def play_live(self, url, max_height=None, audio_only=False):
+    def play_live(self, url):
         if not VLC_AVAILABLE or not self._media_player:
             self.error_occurred.emit("VLC is not available.")
             return
@@ -296,15 +296,10 @@ class VideoPlayer(QWidget):
         self._current_video_url = url
         self._current_audio_url = None
         self._current_container = None
-        self._live_options = (max_height, audio_only)
+        self._live = True
 
         media = self._vlc_instance.media_new(url)
         media.add_option(":network-caching=1500")
-        media.add_option(":adaptive-logic=highest")
-        if max_height:
-            media.add_option(f":adaptive-maxheight={max_height}")
-        if audio_only:
-            media.add_option(":no-video")
 
         self.position_slider.setValue(self.position_slider.maximum())
         self.position_slider.setEnabled(False)
@@ -352,8 +347,8 @@ class VideoPlayer(QWidget):
                 return
             state = self._media_player.get_state()
             if vlc and state in (vlc.State.Ended, vlc.State.Stopped, vlc.State.NothingSpecial):
-                if self._live_options is not None:
-                    self.play_live(self._current_video_url, *self._live_options)
+                if self._live:
+                    self.play_live(self._current_video_url)
                 else:
                     self.play_stream(self._current_video_url, self._current_audio_url,
                                      container=self._current_container)
@@ -371,7 +366,7 @@ class VideoPlayer(QWidget):
         self._current_video_url = None
         self._current_audio_url = None
         self._current_container = None
-        self._live_options = None
+        self._live = False
         self.play_button.setText("Play")
         self._poll_timer.stop()
         self.position_slider.setEnabled(True)
@@ -408,7 +403,7 @@ class VideoPlayer(QWidget):
             self.mute_button.setText("Mute")
 
     def _update_position(self):
-        if not self._media_player or self._live_options is not None:
+        if not self._media_player or self._live:
             return
         pos = self._media_player.get_position()
         if pos >= 0:
@@ -500,7 +495,7 @@ class VideoPlayer(QWidget):
             self.toggle_fullscreen()
 
     def _skip(self, ms):
-        if not self._media_player or not self._is_playing or self._live_options is not None:
+        if not self._media_player or not self._is_playing or self._live:
             return
         current = self._media_player.get_time()
         total = self._media_player.get_length()

@@ -8,7 +8,7 @@ from pytubefix.exceptions import BotDetection, LiveStreamError
 
 FETCH_CLIENT_FALLBACKS = ("MWEB", "WEB")
 
-LIVE_CLIENT = "ANDROID_VR"
+LIVE_CLIENT = "VISION_OS"
 
 LIVE_UNAVAILABLE_MESSAGE = (
     "YouTube did not offer a playable stream for this live broadcast. "
