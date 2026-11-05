@@ -5,7 +5,7 @@ import webbrowser
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QComboBox, QFrame, QGroupBox, QMessageBox,
-    QCheckBox, QListWidget, QInputDialog, QSplitter
+    QCheckBox, QListWidget, QInputDialog, QSplitter, QMenu
 )
 from PySide6.QtCore import Qt, Slot, Signal, QSettings, QTimer
 from PySide6.QtGui import QPixmap
@@ -21,6 +21,7 @@ from app.dialogs import SettingsDialog
 from app.widgets import VideoPlayer, DownloadsPanel, Toast, SearchPanel, BrowserPlayer
 from app.core import DownloadManager, DownloadJob
 from app.core.audio_tracks import available_tracks, default_track, streams_for_track, track_key
+from app.core.bookmarks import Bookmarks
 from app.core.stream_relay import StreamRelay
 
 
@@ -55,6 +56,12 @@ def _filesize_mb(stream):
         return stream.filesize_mb
     except Exception:
         return None
+
+
+def _menu_text(title):
+    if len(title) > 80:
+        title = title[:77] + "..."
+    return title.replace("&", "&&")
 
 
 class MainWindow(QMainWindow):
@@ -95,6 +102,10 @@ class MainWindow(QMainWindow):
         settings_action = settings_menu.addAction("Preferences...")
         settings_action.triggered.connect(self.open_settings)
 
+        self.bookmarks = Bookmarks(self.settings)
+        self.bookmarks_menu = menu_bar.addMenu("Bookmarks")
+        self.bookmarks_menu.aboutToShow.connect(self._populate_bookmarks_menu)
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         outer = QHBoxLayout(central_widget)
@@ -105,7 +116,8 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.splitter)
 
         self.search_panel = SearchPanel(self.settings)
-        self.search_panel.url_selected.connect(self._on_search_url_selected)
+        self.search_panel.url_selected.connect(self._load_url)
+        self.search_panel.bookmark_requested.connect(self._bookmark_search_result)
         self.search_panel.thread_created.connect(self._track_thread)
         self.search_panel.setMinimumWidth(300)
         self.splitter.addWidget(self.search_panel)
@@ -153,6 +165,8 @@ class MainWindow(QMainWindow):
         self.player.error_occurred.connect(self._player_error)
         self.player.play_requested.connect(self.preview_video)
         self.player.playback_stopped.connect(self._on_playback_stopped)
+        self.player.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.player.customContextMenuRequested.connect(self._show_player_menu)
         self.right_layout.addWidget(self.player, stretch=1)
 
         self.playback_frame = QFrame()
@@ -371,6 +385,40 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             self.download_manager.apply_settings()
 
+    def _populate_bookmarks_menu(self):
+        self.bookmarks_menu.clear()
+        items = self.bookmarks.items()
+        if not items:
+            empty = self.bookmarks_menu.addAction("No bookmarks yet. Right-click a video to add one.")
+            empty.setEnabled(False)
+            return
+        for item in items:
+            action = self.bookmarks_menu.addAction(_menu_text(item["title"]))
+            action.triggered.connect(lambda checked=False, url=item["url"]: self._load_url(url))
+        self.bookmarks_menu.addSeparator()
+        remove_menu = self.bookmarks_menu.addMenu("Remove Bookmark")
+        for item in items:
+            action = remove_menu.addAction(_menu_text(item["title"]))
+            action.triggered.connect(lambda checked=False, url=item["url"]: self.bookmarks.remove(url))
+
+    def _show_player_menu(self, pos):
+        menu = QMenu(self)
+        bookmark = menu.addAction("Add to Bookmarks")
+        bookmark.setEnabled(bool(self.video_title))
+        if menu.exec(self.player.mapToGlobal(pos)) is bookmark:
+            self._add_bookmark(self.video_url, self.video_title)
+
+    def _bookmark_search_result(self, data):
+        self._add_bookmark(data.get("url", ""), data.get("title", ""))
+
+    def _add_bookmark(self, url, title):
+        if not url:
+            return
+        if self.bookmarks.add(url, title):
+            self.toast.show_message(f"Bookmarked: {title}", level="success", duration_ms=2500)
+        else:
+            self.toast.show_message("Already in your bookmarks.", level="info", duration_ms=2500)
+
     def get_download_directory(self):
         download_dir = self.settings.value("download_directory", "")
         if not download_dir:
@@ -389,7 +437,7 @@ class MainWindow(QMainWindow):
         if text.strip():
             self.fetch_timer.start()
 
-    def _on_search_url_selected(self, url):
+    def _load_url(self, url):
         self.url_entry.blockSignals(True)
         self.url_entry.setText(url)
         self.url_entry.blockSignals(False)
@@ -415,6 +463,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Fetching data...")
         self.error_label.clear()
         self.title_label.clear()
+        self.video_title = ""
         self.resolution_combo.clear()
         self.video_format_combo.clear()
         self.audio_quality_combo.clear()

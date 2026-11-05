@@ -2,7 +2,7 @@ import re
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QComboBox, QScrollArea, QFrame, QSizePolicy, QCompleter, QApplication
+    QComboBox, QScrollArea, QFrame, QSizePolicy, QCompleter, QApplication, QMenu
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QUrl, QByteArray, QSettings, QStringListModel
 from PySide6.QtGui import QPixmap, QFont, QCursor
@@ -42,6 +42,7 @@ def _format_duration(seconds):
 class ResultCard(QFrame):
     clicked = Signal(dict)
     channel_requested = Signal(str)
+    bookmark_requested = Signal(dict)
 
     def __init__(self, data, parent=None):
         super().__init__(parent)
@@ -202,10 +203,17 @@ class ResultCard(QFrame):
             self.clicked.emit(self.data)
         super().mousePressEvent(event)
 
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        bookmark = menu.addAction("Add to Bookmarks")
+        if menu.exec(event.globalPos()) is bookmark:
+            self.bookmark_requested.emit(self.data)
+
 
 class SearchPanel(QWidget):
     url_selected = Signal(str)
     thread_created = Signal(object)
+    bookmark_requested = Signal(dict)
 
     def __init__(self, settings: QSettings, parent=None):
         super().__init__(parent)
@@ -516,6 +524,7 @@ class SearchPanel(QWidget):
             card = ResultCard(r)
             card.clicked.connect(self._on_card_clicked)
             card.channel_requested.connect(self._on_channel_requested)
+            card.bookmark_requested.connect(self.bookmark_requested)
             insert_pos = self.results_layout.count() - 1
             self.results_layout.insertWidget(insert_pos, card)
             self._cards.append(card)
