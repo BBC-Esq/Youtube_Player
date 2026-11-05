@@ -1,12 +1,25 @@
 import re
+import urllib.error
 import urllib.request
 
 from PySide6.QtCore import QThread, Signal
 
 from pytubefix import YouTube
-from pytubefix.exceptions import BotDetection, LiveStreamError
+from pytubefix.exceptions import BotDetection, LiveStreamError, RegexMatchError
+from pytubefix.extract import video_id
+
+from app.constants import CHANNEL_LIVE_LINK
 
 FETCH_CLIENT_FALLBACKS = ("MWEB", "WEB")
+
+NOT_A_VIDEO_MESSAGE = (
+    "This link does not lead to a video. Paste the link of a YouTube video, "
+    "or of a channel's live stream such as youtube.com/@ChannelName/live."
+)
+
+CHANNEL_NOT_LIVE_MESSAGE = "This channel is not streaming live right now."
+
+PAGE_REFUSED_MESSAGE = "YouTube refused to open this channel's live page."
 
 LIVE_CLIENT = "VISION_OS"
 
@@ -47,6 +60,32 @@ def _live_resolutions(hls_url):
         f"{height}p{fps if fps > 30 else ''}"
         for height, fps in sorted(fps_by_height.items(), reverse=True)
     ]
+
+
+class ChannelPageRefused(Exception):
+    pass
+
+
+def _channel_live_video(url):
+    if "://" not in url:
+        url = "https://" + url
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            final_url = response.geturl()
+            page = response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        if error.code == 429:
+            raise ChannelPageRefused() from error
+        raise
+    if "/sorry/" in final_url:
+        raise ChannelPageRefused()
+    canonical = re.search(r'<link rel="canonical" href="([^"]+)"', page)
+    if canonical and "/watch?v=" in canonical.group(1):
+        return canonical.group(1)
+    return None
 
 
 def _default_client_name():
@@ -165,8 +204,21 @@ class FetchThread(QThread):
             self.blocked.emit()
         return None
 
+    def _video_url(self):
+        if CHANNEL_LIVE_LINK.search(self.url):
+            watch_url = _channel_live_video(self.url)
+            if not watch_url:
+                raise ValueError(CHANNEL_NOT_LIVE_MESSAGE)
+            return watch_url
+        try:
+            video_id(self.url)
+        except RegexMatchError:
+            raise ValueError(NOT_A_VIDEO_MESSAGE) from None
+        return self.url
+
     def run(self):
         try:
+            self.url = self._video_url()
             result = self._fetch_with_fallbacks()
             if result is None or self._cancelled:
                 return
@@ -177,6 +229,10 @@ class FetchThread(QThread):
                 self.client_switched.emit(original_client, yt.client)
 
             self.finished.emit(streams_info, captions_info, streams_objects, "Data fetched successfully.", thumbnail_url)
+        except ChannelPageRefused:
+            if not self._cancelled:
+                self.error.emit(PAGE_REFUSED_MESSAGE)
+                self.blocked.emit()
         except Exception as e:
             if not self._cancelled:
                 self.error.emit(str(e))

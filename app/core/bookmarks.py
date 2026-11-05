@@ -3,8 +3,12 @@ import json
 from pytubefix.exceptions import RegexMatchError
 from pytubefix.extract import video_id
 
+from app.constants import CHANNEL_LIVE_LINK
+
 
 def _watch_url(url):
+    if CHANNEL_LIVE_LINK.search(url):
+        return url
     try:
         return f"https://www.youtube.com/watch?v={video_id(url)}"
     except RegexMatchError:

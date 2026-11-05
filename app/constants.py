@@ -1,3 +1,9 @@
+import re
+
+CHANNEL_LIVE_LINK = re.compile(
+    r"youtube\.com/(?:@|channel/|c/|user/)[^/?#]+/live/?(?:[?#]|$)", re.IGNORECASE
+)
+
 AUDIO_FORMATS = {
     "MP3": {"codec": "mp3", "extension": "mp3", "container": "mp3", "lossy": True},
     "AAC": {"codec": "aac", "extension": "aac", "container": "adts", "lossy": True},
