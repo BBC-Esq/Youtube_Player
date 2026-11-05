@@ -1,7 +1,7 @@
 import re
 
 CHANNEL_LIVE_LINK = re.compile(
-    r"youtube\.com/(?:@|channel/|c/|user/)[^/?#]+/live/?(?:[?#]|$)", re.IGNORECASE
+    r"youtube\.com/(?:channel/|c/|user/)?[^/?#]+/live/?(?:[?#]|$)", re.IGNORECASE
 )
 
 AUDIO_FORMATS = {
