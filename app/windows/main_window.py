@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton, QComboBox, QFrame, QGroupBox, QMessageBox,
     QCheckBox, QListWidget, QInputDialog, QSplitter, QMenu
 )
-from PySide6.QtCore import Qt, Slot, Signal, QSettings, QTimer
+from PySide6.QtCore import Qt, Slot, Signal, QTimer
 from PySide6.QtGui import QPixmap
 
 from app.constants import (
@@ -20,6 +20,7 @@ from app.threads import FetchThread, CaptionDownloadThread, ThumbnailThread, Fil
 from app.dialogs import SettingsDialog
 from app.widgets import VideoPlayer, DownloadsPanel, Toast, SearchPanel, BrowserPlayer
 from app.core import DownloadManager, DownloadJob
+from app.core.app_settings import app_settings
 from app.core.audio_tracks import available_tracks, default_track, streams_for_track, track_key
 from app.core.bookmarks import Bookmarks
 from app.core.stream_relay import StreamRelay
@@ -82,7 +83,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("YouTube Downloader")
         self.setGeometry(100, 100, 1200, 800)
 
-        self.settings = QSettings("YouTubeDownloader", "YouTubeDownloader")
+        self.settings = app_settings()
         saved_geometry = self.settings.value("window_geometry")
         if saved_geometry:
             self.restoreGeometry(saved_geometry)

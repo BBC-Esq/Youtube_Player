@@ -3,9 +3,10 @@ import re
 from collections import deque
 from typing import Optional
 
-from PySide6.QtCore import QObject, QSettings, Signal, Slot
+from PySide6.QtCore import QObject, Signal, Slot
 
 from app.constants import AUDIO_FORMATS, CODEC_SAMPLE_FORMATS, detect_mux_container
+from app.core.app_settings import app_settings
 from app.core.audio_tracks import track_key
 from app.core.cpu import configured_conversion_workers
 from app.core.download_job import DownloadJob, JobStatus
@@ -43,7 +44,7 @@ class DownloadManager(QObject):
         self._max_concurrent: int = 1
         self._convert_queue: deque[str] = deque()
         self._converting: set[str] = set()
-        self._settings = QSettings("YouTubeDownloader", "YouTubeDownloader")
+        self._settings = app_settings()
         self._oauth_verifier = oauth_verifier
         self._tracked_threads: list = []
 

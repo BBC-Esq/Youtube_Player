@@ -225,7 +225,7 @@ class SearchPanel(QWidget):
         self._net.finished.connect(self._on_thumbnail_reply)
         self._thumb_map = {}
         self._settings = settings
-        self._search_history = self._settings.value("search_history", []) or []
+        self._search_history = self._settings.value("search_history", [], type=list)
         self._mode = "search"
         self._channel_name = ""
         self._channel_url = ""

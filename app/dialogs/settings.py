@@ -3,9 +3,9 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QLineEdit, QPushButton, QFileDialog, QMessageBox, QCheckBox, QSpinBox
 )
-from PySide6.QtCore import QSettings
 
 from app.core.adblock import AUTOPLAY_SETTING_KEY
+from app.core.app_settings import app_settings
 from app.core.cpu import (
     CONVERSION_WORKERS_SETTING_KEY, RESERVED_PHYSICAL_CORES,
     configured_conversion_workers, max_conversion_workers, physical_core_count
@@ -18,7 +18,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.setMinimumWidth(450)
 
-        self.settings = QSettings("YouTubeDownloader", "YouTubeDownloader")
+        self.settings = app_settings()
 
         layout = QVBoxLayout(self)
 

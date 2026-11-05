@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, QUrl, QSettings, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox
 )
@@ -11,6 +11,7 @@ from app.core.adblock import (
     AUTOPLAY_CONTROL_SCRIPT, AUTOPLAY_SETTING_KEY, PLAYER_PRUNE_SCRIPT,
     THEATER_SCRIPT, build_engine
 )
+from app.core.app_settings import app_settings
 
 
 class AdBlockInterceptor(QWebEngineUrlRequestInterceptor):
@@ -62,7 +63,7 @@ class BrowserPlayer(QDialog):
         self.resize(1100, 700)
         self.setSizeGripEnabled(True)
 
-        self._settings = QSettings("YouTubeDownloader", "YouTubeDownloader")
+        self._settings = app_settings()
         self._autoplay_enabled = self._settings.value(AUTOPLAY_SETTING_KEY, False, type=bool)
         self._profile = QWebEngineProfile(self)
         self._engine = build_engine()
