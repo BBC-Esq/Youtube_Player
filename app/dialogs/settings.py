@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (
 from app.core.adblock import AUTOPLAY_SETTING_KEY
 from app.core.app_settings import app_settings
 from app.core.audio_devices import (
-    AUDIO_DEVICE_SETTING_KEY, AUDIO_DEVICE_NAME_SETTING_KEY, output_devices
+    AUDIO_DEVICE_SETTING_KEY, AUDIO_DEVICE_NAME_SETTING_KEY, HEADSET_FALLBACK_SETTING_KEY,
+    output_devices
 )
 from app.core.cpu import (
     CONVERSION_WORKERS_SETTING_KEY, RESERVED_PHYSICAL_CORES,
@@ -125,13 +126,24 @@ class SettingsDialog(QDialog):
         group_layout.addLayout(row)
         note = QLabel(
             "The player's sound goes to this device without changing the Windows default. "
-            "While the device is unplugged, or a Razer Barracuda Pro headset on its 2.4 GHz "
-            "dongle is switched off, the Windows default is used instead. "
+            "While the device is unplugged, the Windows default is used instead. "
             "Watch in Browser always uses the Windows default."
         )
         note.setWordWrap(True)
         note.setStyleSheet("font-size: 11px;")
         group_layout.addWidget(note)
+        self.headset_checkbox = QCheckBox(
+            "Use the Windows default while a Razer Barracuda Pro headset is switched off "
+            "(work in progress)"
+        )
+        self.headset_checkbox.setToolTip(
+            "Applies to a Razer Barracuda Pro on its 2.4 GHz dongle. This is still being "
+            "worked on and may not switch reliably."
+        )
+        self.headset_checkbox.setChecked(
+            self.settings.value(HEADSET_FALLBACK_SETTING_KEY, False, type=bool)
+        )
+        group_layout.addWidget(self.headset_checkbox)
         return group
 
     def browse_folder(self):
@@ -151,4 +163,5 @@ class SettingsDialog(QDialog):
             device_id = self.device_combo.currentData() or ""
             self.settings.setValue(AUDIO_DEVICE_SETTING_KEY, device_id)
             self.settings.setValue(AUDIO_DEVICE_NAME_SETTING_KEY, self._device_names.get(device_id, ""))
+            self.settings.setValue(HEADSET_FALLBACK_SETTING_KEY, self.headset_checkbox.isChecked())
         self.accept()

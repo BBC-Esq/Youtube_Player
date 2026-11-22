@@ -3,6 +3,7 @@ import sys
 
 AUDIO_DEVICE_SETTING_KEY = "audio_output_device"
 AUDIO_DEVICE_NAME_SETTING_KEY = "audio_output_device_name"
+HEADSET_FALLBACK_SETTING_KEY = "headset_fallback"
 
 
 def output_devices():

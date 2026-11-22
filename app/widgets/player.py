@@ -107,6 +107,7 @@ class VideoPlayer(QWidget):
         self._sound_only = False
         self._audio_device = ""
         self._headset_link = None
+        self._headset_fallback = False
         self._thumbnail_pixmap = None
         self._hide_timer = QTimer()
         self._hide_timer.setSingleShot(True)
@@ -320,8 +321,9 @@ class VideoPlayer(QWidget):
         self.time_label.setText("LIVE")
         self._start(media)
 
-    def set_audio_device(self, device_id):
+    def set_audio_device(self, device_id, headset_fallback=False):
         self._audio_device = device_id or ""
+        self._headset_fallback = bool(headset_fallback)
         if self._media_player:
             self._apply_audio_device()
 
@@ -335,11 +337,13 @@ class VideoPlayer(QWidget):
 
     def _update_headset_link(self, device):
         link = self._headset_link
-        if link and link.device_id == device and link.is_alive():
+        if self._headset_fallback and link and link.device_id == device and link.is_alive():
             if link.headset_on is None:
                 link.ask()
             return
         self._close_headset_link()
+        if not self._headset_fallback:
+            return
         path = find_headset_dongle(device)
         if not path:
             return
